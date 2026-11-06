@@ -1,6 +1,6 @@
 # Market Analyst Agent: Build & Run Guide
 
-A Python agent that writes a morning brief on your stock watchlist. Code computes every number; Claude investigates the unusual moves and writes up what happened and why.
+A Python agent that writes a brief on your stock watchlist at any time of day: a brief on the last finished session when the market is closed, or an intraday update while it's open. Code computes every number; Claude investigates the unusual moves and writes up what happened and why.
 
 ---
 
@@ -44,13 +44,27 @@ market_tools.py  (MCP server, your code)
 **What happens on each run:**
 
 1. `run_brief.py` starts `market_tools.py` as a background process and connects to it over MCP.
-2. Claude calls `flag_events`. Code compares each ticker's latest daily return against its last 3 months and flags it if:
+2. Claude calls `flag_events`. Code first checks whether the market is open (see below), then compares each ticker's move against normal and flags it if:
    - the return is more than 2 standard deviations from normal (z-score ≥ 2), **or**
-   - volume is at least 2× its 20-day average.
+   - volume is at least 2× normal.
 3. For each flagged ticker, Claude calls `get_news` to find the likely catalyst.
-4. Claude writes the brief in your template, with sources. The script saves it to `briefs/YYYY-MM-DD.md` and prints the cost.
+4. Claude writes the brief in your template, with sources. The script saves it to `briefs/`, named by date and time, and prints the cost.
 
 **What Claude can and can't do:** it can only call those three tools. Built-in tools (shell, file access, web) are switched off, and there is a hard cost cap per run.
+
+### Market open or closed
+
+The tools check the market's status on every run and choose the right comparison automatically:
+
+| When you run it | Status | What gets compared |
+|---|---|---|
+| Before the open, evenings, weekends, holidays | `complete` | The last finished session vs. the previous 3 months of daily moves |
+| While the market is open | `in_progress` | Today's move **so far** vs. the same time of day in each of the last ~20 sessions |
+| On an early-close (half) day, after the 1pm close | `complete` | That day's shorter session, treated as finished |
+
+**Why a partial day needs its own comparison.** By 11:30am only about a third of a day's volume has traded. Compared with full days, a normal morning looks like a 0.32× volume day, and the move so far is judged against whole-day moves. Comparing with the same time of day fixes both: a normal morning reads as 1.0× volume, and a 2% move by 11:30 is judged against how much the stock usually moves by 11:30.
+
+**How it tells whether the market is open.** It checks the clock (New York time) against SPY's latest 5-minute price bar. If it's before 4pm and SPY has traded in the last 30 minutes, the market is open. This handles weekends, holidays and early-close days without needing a holiday calendar. Past early-close days that ended before the current time of day are left out of the comparison.
 
 ---
 
@@ -77,7 +91,7 @@ market-agent/
 ├── requirements.txt     Python dependencies
 ├── tests/
 │   └── test_market_tools.py   offline tests for the tools
-└── briefs/              created on first run; one .md file per day
+└── briefs/              created on first run; one .md file per run
 ```
 
 | File | When you'll edit it |
@@ -179,12 +193,22 @@ You'll see each tool call as it happens, then a summary line:
 ```
 -> mcp__market__flag_events {}
 -> mcp__market__get_news {'ticker': 'NVDA'}
-Saved briefs/2026-11-03.md (6 turns, $0.0xx)
+Saved briefs/2026-11-06_0815.md (6 turns, $0.0xx)
 ```
 
 Open the file in `briefs/` to read the brief.
 
-**Note on timing:** run it before the market opens or after it closes. The brief then covers the most recent completed trading session (on a Monday morning, that's Friday). During trading hours, yfinance includes the current partial day, so returns are incomplete and volume looks low. Each ticker's `as_of` date shows which session was used.
+**When to run it:**
+
+| Run time (New York) | You get |
+|---|---|
+| Before 9:30am | A brief on the previous session (on a Monday, that's Friday) |
+| 9:30am–4pm | An **intraday update**: moves so far today, compared with the same time of day. Best after about 10:30am, because the first hour is noisy |
+| After 4pm, or any time on weekends and holidays | A brief on the last full session |
+
+**File names:** `2026-11-06_0815.md` for a brief on a finished session, `2026-11-06_1230_intraday.md` for an update while the market is open. Runs never overwrite each other.
+
+The brief's title, and each ticker's `as_of` value, show exactly which session and time the figures cover.
 
 ---
 
@@ -199,6 +223,7 @@ Most of the quality comes from tuning, not code. Run it daily for a week and kee
 | Explanations are vague or speculative | Tighten the rules in `analyst_prompt.md` (for example: "only state a catalyst if a headline directly mentions it") |
 | Format isn't what you want | Edit the output template in `analyst_prompt.md` |
 | Wrong or stale explanations | Check the `get_news` output in the Inspector; the data may be the issue, not the prompt |
+| Intraday updates flag too much | Schedule them later in the day (after 10:30am), when the same-time-of-day comparison is steadier |
 
 Change one thing at a time so you know what helped.
 
@@ -214,10 +239,13 @@ Run `crontab -e` and add these lines (replace the paths and key):
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
-15 8 * * 1-5  /path/to/market-agent/.venv/bin/python /path/to/market-agent/run_brief.py >> /path/to/market-agent/run.log 2>&1
+15 8 * * 1-5   /path/to/market-agent/.venv/bin/python /path/to/market-agent/run_brief.py >> /path/to/market-agent/run.log 2>&1
+30 12 * * 1-5  /path/to/market-agent/.venv/bin/python /path/to/market-agent/run_brief.py >> /path/to/market-agent/run.log 2>&1
 ```
 
-This runs at 8:15am, Monday to Friday. Cron doesn't load your shell profile, which is why the key goes in the crontab. Check `run.log` if a brief is missing.
+The first line runs at 8:15am (a brief on the previous session). The second runs at 12:30pm (an intraday update). Both run Monday to Friday; delete the second line if you only want the morning brief.
+
+Cron doesn't load your shell profile, which is why the key goes in the crontab. Cron uses your computer's time zone, so if that isn't New York time, adjust the hours. Check `run.log` if a brief is missing.
 
 ### Windows (Task Scheduler)
 
@@ -225,7 +253,10 @@ Make sure you've set the key permanently with `setx` (step 4.3), then run:
 
 ```powershell
 schtasks /create /tn "MarketBrief" /sc weekly /d MON,TUE,WED,THU,FRI /st 08:15 /tr "C:\path\to\market-agent\.venv\Scripts\python.exe C:\path\to\market-agent\run_brief.py"
+schtasks /create /tn "MarketBriefMidday" /sc weekly /d MON,TUE,WED,THU,FRI /st 12:30 /tr "C:\path\to\market-agent\.venv\Scripts\python.exe C:\path\to\market-agent\run_brief.py"
 ```
+
+The second command adds the 12:30pm intraday update; skip it if you only want the morning brief. Times are in your computer's time zone.
 
 ### Later: run it in the cloud
 
@@ -314,7 +345,7 @@ mcp_servers={
 | `strict_mcp_config=True` | Uses only the MCP servers listed in the script | on |
 | `allowed_tools` | The only tools Claude can call | 3 tools |
 
-The script prints the cost of each run. Watch it for the first few days, then set `max_budget_usd` a little above your typical run. Cost grows with watchlist size and the number of flagged tickers.
+The script prints the cost of each run. Watch it for the first few days, then set `max_budget_usd` a little above your typical run. Cost grows with watchlist size and the number of flagged tickers, and each extra scheduled run (such as a midday update) costs the same again.
 
 **The output is research, not investment advice.** The prompt forbids buy/sell recommendations; keep it that way.
 
@@ -333,6 +364,10 @@ The script prints the cost of each run. Watch it for the first few days, then se
 | `Run failed: error_max_turns` | Too many steps. Raise `max_turns` (common with long watchlists). |
 | `get_news` returns an empty list | Yahoo has no recent headlines for that ticker. The brief should say "No clear catalyst found." |
 | Scheduled run didn't happen | The computer was asleep, a path is wrong, or the key isn't available to the scheduler. Check `run.log`. |
+| `no intraday data for SPY; can't tell if the market is open` | Yahoo's 5-minute data didn't load, usually because of rate limiting or a network problem. Wait and retry. The run stops before calling Claude, so it costs nothing. |
+| A ticker shows `not enough intraday history` (market open only) | It has fewer than 10 recent sessions of 5-minute data, for example a recent IPO. It still works when the market is closed. |
+| A ticker shows `no trades yet today` | It hasn't traded since the open (halted or very thinly traded). |
+| An "intraday update" just after an early close | For up to 30 minutes after a 1pm early close, the run may still treat the market as open. The figures are correct; they're just labeled as intraday. |
 
 ---
 
@@ -341,8 +376,11 @@ The script prints the cost of each run. Watch it for the first few days, then se
 - **yfinance is unofficial.** It scrapes Yahoo Finance and can break or be rate-limited. It's fine for a prototype; switch to a paid provider for anything you rely on.
 - **News is headlines only.** There are no SEC filings, earnings call transcripts or analyst data yet.
 - **No memory.** Each brief starts fresh, with no comparison to earlier briefs.
-- **Daily data only.** Moves are measured close-to-close, not intraday. Run it outside market hours (see section 6).
-- **Testing status:** the offline test suite passes (testing guide, step 3), including the tools working through a real MCP client. The live data check (step 4) and a full agent run (step 6) still need to be confirmed on your machine.
+- **US market hours only.** The open/closed check uses New York time and SPY, so it suits US-listed stocks.
+- **Intraday comparisons use about 20 sessions.** Yahoo provides roughly a month of 5-minute data this way, compared with 3 months for finished sessions, so intraday z-scores are rougher. The first 30–60 minutes after the open are the noisiest.
+- **More data requests while the market is open:** two per ticker instead of one, so Yahoo rate limits are more likely with a long watchlist.
+- **Intraday data can lag** by a few minutes. The `as_of` time shows exactly what was used.
+- **Testing status:** the offline test suite passes (testing guide, step 3). It covers market open/closed detection (including holidays and early-close days), intraday comparisons, and the tools working through a real MCP client. The live data check (step 4) and a full agent run (step 6) still need to be confirmed on your machine.
 
 ---
 
@@ -351,7 +389,7 @@ The script prints the cost of each run. Watch it for the first few days, then se
 | Phase | What you add | Why |
 |---|---|---|
 | 1. Proof of concept (optional) | Run the brief as a no-code scheduled task in Claude, with a market data connector | Test the brief's usefulness before writing code |
-| 2. Basic version (this guide) | Watchlist scan, news, daily brief | A working agent you control |
+| 2. Basic version (this guide) | Watchlist scan, news, daily brief and intraday updates | A working agent you control |
 | 3. Reliability | Paid data via a provider's MCP server; earnings dates; SEC filings from EDGAR (free) | Trustworthy data and better "why" explanations |
 | 4. Memory | Save each brief, plus a `get_past_briefs(ticker, days)` tool | "Is this move part of a trend?" and tracking your thesis on each stock |
 | 5. RAG | Search over many filings and transcripts | Questions like "how has management's language on margins changed over 12 quarters?" |
@@ -392,17 +430,39 @@ JPM
 Every number the agent reports comes from these functions, computed in code.
 The agent never does math itself.
 
+Works at any time of day:
+- Market closed (evenings, weekends, holidays, pre-market): measures the last
+  completed session against the previous 3 months of daily moves.
+- Market open: measures today's move *so far* against the same time of day in
+  recent sessions, so a partial day is never treated as a full one.
+
 Test it on its own:  npx @modelcontextprotocol/inspector python market_tools.py
 """
 
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
+import pandas as pd
 import yfinance as yf
 from mcp.server.mcpserver import MCPServer
 
 WATCHLIST_FILE = Path(__file__).parent / "watchlist.txt"
+ET = ZoneInfo("America/New_York")
+MARKET_CLOSE = time(16, 0)
+REFERENCE_TICKER = "SPY"             # used to tell whether the market is open
+STALE_AFTER = timedelta(minutes=30)  # no new bar for this long means trading has stopped (early close)
+MIN_INTRADAY_DAYS = 10               # past sessions needed for a same-time-of-day comparison
 
 mcp = MCPServer("market-tools")
+
+
+def now_et() -> datetime:
+    return datetime.now(ET)
+
+
+def _to_et(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    return index.tz_localize(ET) if index.tz is None else index.tz_convert(ET)
 
 
 def load_watchlist() -> list[str]:
@@ -410,27 +470,117 @@ def load_watchlist() -> list[str]:
     return [ln.strip().upper() for ln in lines if ln.strip() and not ln.startswith("#")]
 
 
-def _moves(ticker: str) -> dict:
+def market_session() -> dict:
+    """Work out whether a US trading session is in progress right now.
+
+    Uses the clock plus SPY's latest 5-minute bar, so weekends, holidays and
+    early-close (half) days are handled without a holiday calendar.
+    """
+    bars = yf.Ticker(REFERENCE_TICKER).history(period="5d", interval="5m")
+    if bars.empty:
+        raise RuntimeError(f"no intraday data for {REFERENCE_TICKER}; can't tell if the market is open")
+    last_bar = _to_et(bars.index)[-1]
+    now = now_et()
+    in_progress = (
+        last_bar.date() == now.date()
+        and now.time() < MARKET_CLOSE
+        and now - (last_bar + timedelta(minutes=5)) < STALE_AFTER
+    )
+    if in_progress:
+        return {"status": "in_progress", "as_of": last_bar.strftime("%Y-%m-%d %H:%M ET")}
+    return {"status": "complete", "as_of": last_bar.date().isoformat()}
+
+
+def _moves(ticker: str, session: dict) -> dict:
     """Core calculation shared by the tools below."""
-    df = yf.Ticker(ticker).history(period="3mo")
-    if len(df) < 25:
+    daily = yf.Ticker(ticker).history(period="3mo")
+    if len(daily) < 25:
+        return {"ticker": ticker, "error": "not enough price history"}
+    daily.index = _to_et(daily.index)
+    if session["status"] == "in_progress":
+        return _intraday_moves(ticker, daily, session)
+    return _completed_session_moves(ticker, daily, session)
+
+
+def _completed_session_moves(ticker: str, daily: pd.DataFrame, session: dict) -> dict:
+    """Last completed session vs. the previous 3 months of daily moves."""
+    last_session = date.fromisoformat(session["as_of"])
+    daily = daily[daily.index.date <= last_session]  # ignore any row for a session that hasn't finished
+    if len(daily) < 25:
         return {"ticker": ticker, "error": "not enough price history"}
 
-    close, volume = df["Close"], df["Volume"]
+    close, volume = daily["Close"], daily["Volume"]
     returns = close.pct_change().dropna()
     today = returns.iloc[-1]
-    baseline = returns.iloc[:-1]  # history before today, so today doesn't skew its own baseline
+    baseline = returns.iloc[:-1]  # history before the session, so it doesn't skew its own baseline
     std = baseline.std()
     avg_volume = volume.iloc[-21:-1].mean()  # prior 20 sessions
 
     return {
         "ticker": ticker,
-        "as_of": df.index[-1].date().isoformat(),
+        "session": "complete",
+        "as_of": daily.index[-1].date().isoformat(),
         "last_close": round(float(close.iloc[-1]), 2),
         "return_1d_pct": round(float(today) * 100, 2),
         "return_5d_pct": round(float(close.iloc[-1] / close.iloc[-6] - 1) * 100, 2),
         "return_zscore": round(float((today - baseline.mean()) / std), 2) if std > 0 else 0.0,
         "volume_vs_avg": round(float(volume.iloc[-1] / avg_volume), 2) if avg_volume > 0 else None,
+        "compared_to": "daily moves over the last 3 months",
+    }
+
+
+def _intraday_moves(ticker: str, daily: pd.DataFrame, session: dict) -> dict:
+    """Today's move so far vs. the same time of day in recent sessions."""
+    bars = yf.Ticker(ticker).history(period="1mo", interval="5m")
+    if bars.empty:
+        return {"ticker": ticker, "error": "no intraday data"}
+    bars.index = _to_et(bars.index)
+
+    today = datetime.strptime(session["as_of"], "%Y-%m-%d %H:%M ET").date()
+    today_bars = bars[bars.index.date == today]
+    if today_bars.empty:
+        return {"ticker": ticker, "error": "no trades yet today"}
+    cutoff = today_bars.index[-1].time()  # compare every past session up to this same time
+
+    closes = pd.Series(daily["Close"].to_numpy(), index=daily.index.date)
+
+    def prev_close(day: date) -> float | None:
+        earlier = closes[closes.index < day]
+        return float(earlier.iloc[-1]) if len(earlier) else None
+
+    past_bars = bars[bars.index.date < today]
+    past_returns, past_volumes = [], []
+    for day, day_bars in past_bars.groupby(past_bars.index.date):
+        if day_bars.index[-1].time() < cutoff:  # session closed early, before this time of day
+            continue
+        upto = day_bars[day_bars.index.time <= cutoff]
+        start = prev_close(day)
+        if upto.empty or start is None:
+            continue
+        past_returns.append(upto["Close"].iloc[-1] / start - 1)
+        past_volumes.append(upto["Volume"].sum())
+
+    start_today = prev_close(today)
+    if len(past_returns) < MIN_INTRADAY_DAYS or start_today is None:
+        return {"ticker": ticker, "error": "not enough intraday history"}
+
+    price = float(today_bars["Close"].iloc[-1])
+    move = price / start_today - 1
+    past = pd.Series(past_returns)
+    std = past.std()
+    avg_volume = sum(past_volumes) / len(past_volumes)
+    earlier_closes = closes[closes.index < today]
+
+    return {
+        "ticker": ticker,
+        "session": "in_progress",
+        "as_of": f"{today.isoformat()} {cutoff:%H:%M} ET",
+        "last_price": round(price, 2),
+        "return_1d_pct": round(move * 100, 2),  # since the previous close
+        "return_5d_pct": round(float(price / earlier_closes.iloc[-5] - 1) * 100, 2),
+        "return_zscore": round(float((move - past.mean()) / std), 2) if std > 0 else 0.0,
+        "volume_vs_avg": round(float(today_bars["Volume"].sum() / avg_volume), 2) if avg_volume > 0 else None,
+        "compared_to": f"the same time of day over the last {len(past_returns)} sessions",
     }
 
 
@@ -438,14 +588,17 @@ def _moves(ticker: str) -> dict:
 def flag_events(z_threshold: float = 2.0, volume_threshold: float = 2.0) -> dict:
     """Scan the whole watchlist and return only the tickers with unusual moves.
 
-    A ticker is flagged if its 1-day return z-score is beyond +/- z_threshold, or its
-    volume is at least volume_threshold times its 20-day average. Quiet tickers come
-    back with just their 1-day return. Call this first when writing a brief.
+    A ticker is flagged if its return z-score is beyond +/- z_threshold, or its volume
+    is at least volume_threshold times normal. Works whether or not the market is open:
+    `session.status` is "complete" for the last finished session, or "in_progress" when
+    the market is open, in which case moves are measured so far today and compared with
+    the same time of day in recent sessions. Call this first when writing a brief.
     """
+    session = market_session()
     flagged, quiet, errors = [], [], []
     for ticker in load_watchlist():
         try:
-            m = _moves(ticker)
+            m = _moves(ticker, session)
         except Exception as e:  # one bad ticker shouldn't sink the whole scan
             errors.append({"ticker": ticker, "error": str(e)})
             continue
@@ -455,16 +608,17 @@ def flag_events(z_threshold: float = 2.0, volume_threshold: float = 2.0) -> dict
             flagged.append(m)
         else:
             quiet.append({"ticker": ticker, "return_1d_pct": m["return_1d_pct"]})
-    return {"flagged": flagged, "quiet": quiet, "errors": errors}
+    return {"session": session, "flagged": flagged, "quiet": quiet, "errors": errors}
 
 
 @mcp.tool()
 def compute_moves(ticker: str) -> dict:
-    """Price and volume stats for one ticker: last close, 1-day and 5-day return,
-    1-day return z-score vs. the last 3 months, and volume vs. its 20-day average.
+    """Price and volume stats for one ticker: price, return since the previous close,
+    5-day return, return z-score and volume vs. normal. When the market is open these
+    are so far today, compared with the same time of day in recent sessions.
     Use this for any figure you report; never estimate numbers yourself.
     """
-    return _moves(ticker.strip().upper())
+    return _moves(ticker.strip().upper(), market_session())
 
 
 @mcp.tool()
@@ -493,7 +647,10 @@ if __name__ == "__main__":
 ### run_brief.py
 
 ```python
-"""Run the analyst agent once and save today's brief to briefs/YYYY-MM-DD.md.
+"""Run the analyst agent once and save the brief to the briefs/ folder.
+
+Works at any time: when the market is open it writes an intraday update
+(moves so far today); otherwise a brief on the last completed session.
 
 Usage:
     export ANTHROPIC_API_KEY=sk-ant-...
@@ -502,7 +659,6 @@ Usage:
 
 import asyncio
 import sys
-from datetime import date
 from pathlib import Path
 
 from claude_agent_sdk import (
@@ -512,6 +668,8 @@ from claude_agent_sdk import (
     ToolUseBlock,
     query,
 )
+
+from market_tools import market_session, now_et
 
 HERE = Path(__file__).parent
 
@@ -537,8 +695,15 @@ options = ClaudeAgentOptions(
 
 
 async def main() -> None:
-    today = date.today().isoformat()
-    prompt = f"Today is {today}. Write the watchlist brief."
+    now = now_et()
+    session = market_session()  # checked before calling Claude, so a data outage costs nothing
+    if session["status"] == "in_progress":
+        prompt = f"It is {now:%Y-%m-%d %H:%M} ET and the market is open. Write an intraday update."
+        filename = f"{now:%Y-%m-%d_%H%M}_intraday.md"
+    else:
+        prompt = (f"It is {now:%Y-%m-%d %H:%M} ET and the market is closed. "
+                  f"Write the watchlist brief for the {session['as_of']} session.")
+        filename = f"{now:%Y-%m-%d_%H%M}.md"
 
     async for message in query(prompt=prompt, options=options):
         # Log every tool call so you can audit where each claim came from
@@ -550,7 +715,7 @@ async def main() -> None:
         if isinstance(message, ResultMessage):
             if message.is_error or not message.result:
                 sys.exit(f"Run failed: {message.subtype}")
-            out = HERE / "briefs" / f"{today}.md"
+            out = HERE / "briefs" / filename
             out.parent.mkdir(exist_ok=True)
             out.write_text(message.result)
             cost = message.total_cost_usd or 0
@@ -564,13 +729,23 @@ if __name__ == "__main__":
 ### analyst_prompt.md
 
 ```markdown
-You are an equity research analyst writing a short morning brief on the user's watchlist.
+You are an equity research analyst writing a short brief on the user's watchlist.
 
 ## Process
 
-1. Call `flag_events` first. It returns the tickers with unusual moves, plus the quiet ones.
+1. Call `flag_events` first. It returns the session status, the tickers with unusual moves, and the quiet ones.
 2. For each flagged ticker, call `get_news` to find the likely reason. Call `compute_moves` if you need more detail on a ticker.
 3. Write the brief.
+
+## Market open vs. closed
+
+Check `session.status` in the `flag_events` result.
+
+- **`complete`**: the market is closed. Write a normal brief on the session dated `session.as_of`.
+- **`in_progress`**: the market is open. Write an intraday update:
+  - Use the intraday title from the template below.
+  - Describe every move as "so far today". Describe volume as "vs. normal for this time of day".
+  - Under the title, add one line: "Market open: figures are as of {session.as_of} and can change before the close."
 
 ## Rules
 
@@ -585,16 +760,17 @@ You are an equity research analyst writing a short morning brief on the user's w
 
 Respond with only the brief, in this markdown format:
 
-# Watchlist brief: {date}
+# Watchlist brief: {session.as_of}
+(When the market is open, use this title instead: # Intraday update: {session.as_of})
 
 ## Notable moves
 
-### {TICKER}: {return_1d_pct}% (z-score {return_zscore}, volume {volume_vs_avg}x average)
+### {TICKER}: {return_1d_pct}% (z-score {return_zscore}, volume {volume_vs_avg}x normal)
 - **What happened:** one or two factual sentences.
 - **Likely why:** the catalyst, with [publisher](url). Or "No clear catalyst found."
 - **Worth watching:** one line on what to check next.
 
-## Quiet today
+## Quiet
 
 {TICKER} ({return_1d_pct}%), ...
 

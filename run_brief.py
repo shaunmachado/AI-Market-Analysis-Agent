@@ -1,4 +1,7 @@
-"""Run the analyst agent once and save today's brief to briefs/YYYY-MM-DD.md.
+"""Run the analyst agent once and save the brief to the briefs/ folder.
+
+Works at any time: when the market is open it writes an intraday update
+(moves so far today); otherwise a brief on the last completed session.
 
 Usage:
     export ANTHROPIC_API_KEY=sk-ant-...
@@ -7,7 +10,6 @@ Usage:
 
 import asyncio
 import sys
-from datetime import date
 from pathlib import Path
 
 from claude_agent_sdk import (
@@ -17,6 +19,8 @@ from claude_agent_sdk import (
     ToolUseBlock,
     query,
 )
+
+from market_tools import market_session, now_et
 
 HERE = Path(__file__).parent
 
@@ -42,8 +46,15 @@ options = ClaudeAgentOptions(
 
 
 async def main() -> None:
-    today = date.today().isoformat()
-    prompt = f"Today is {today}. Write the watchlist brief."
+    now = now_et()
+    session = market_session()  # checked before calling Claude, so a data outage costs nothing
+    if session["status"] == "in_progress":
+        prompt = f"It is {now:%Y-%m-%d %H:%M} ET and the market is open. Write an intraday update."
+        filename = f"{now:%Y-%m-%d_%H%M}_intraday.md"
+    else:
+        prompt = (f"It is {now:%Y-%m-%d %H:%M} ET and the market is closed. "
+                  f"Write the watchlist brief for the {session['as_of']} session.")
+        filename = f"{now:%Y-%m-%d_%H%M}.md"
 
     async for message in query(prompt=prompt, options=options):
         # Log every tool call so you can audit where each claim came from
@@ -55,7 +66,7 @@ async def main() -> None:
         if isinstance(message, ResultMessage):
             if message.is_error or not message.result:
                 sys.exit(f"Run failed: {message.subtype}")
-            out = HERE / "briefs" / f"{today}.md"
+            out = HERE / "briefs" / filename
             out.parent.mkdir(exist_ok=True)
             out.write_text(message.result)
             cost = message.total_cost_usd or 0

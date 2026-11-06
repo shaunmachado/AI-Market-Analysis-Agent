@@ -4,3 +4,9 @@ venv/
 __pycache__/
 *.pyc
 .idea/
+reports.db
+reports.db-wal
+reports.db-shm
+run.log
+frontend/node_modules/
+frontend/dist/

@@ -2,3 +2,6 @@ claude-agent-sdk>=0.2
 mcp>=2.0
 yfinance
 pandas
+starlette>=1.0
+uvicorn
+python-dotenv

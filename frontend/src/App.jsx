@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getCurrentRun, getLatestReport } from './api'
+import { ChartContext } from './chartContext'
 import { useLiveEvents } from './useLiveEvents'
 import { routes, useRoute } from './useRoute'
 import AskPanel from './components/AskPanel'
@@ -7,6 +8,7 @@ import PreviousDaysPreview from './components/PreviousDaysPreview'
 import PreviousDaysTab from './components/PreviousDaysTab'
 import ReportView from './components/ReportView'
 import RunPanel from './components/RunPanel'
+import TickerChart from './components/TickerChart'
 
 export default function App() {
   const route = useRoute()
@@ -14,6 +16,17 @@ export default function App() {
   const [latestError, setLatestError] = useState(null)
   const [run, setRun] = useState(null)
   const [lastSaved, setLastSaved] = useState(null) // tells the previous-days views to refresh
+  const [chartTicker, setChartTicker] = useState(null)
+  const chartOpener = useRef(null) // gets focus back when the chart closes
+
+  const openChart = useCallback((ticker, opener) => {
+    chartOpener.current = opener
+    setChartTicker(ticker)
+  }, [])
+  const closeChart = useCallback(() => {
+    setChartTicker(null)
+    setTimeout(() => chartOpener.current?.focus(), 0)
+  }, [])
 
   const loadLatest = useCallback(() => {
     getLatestReport()
@@ -58,46 +71,50 @@ export default function App() {
   )
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <h1>Market Analyst</h1>
-        <nav className="tabs" aria-label="Sections">
-          {tabLink('today', routes.today, 'Today')}
-          {tabLink('previous', routes.previous(), 'Previous days')}
-        </nav>
-        <span className={`connection ${connected ? 'on' : 'off'}`}>
-          {connected ? 'Live' : 'Reconnecting…'}
-        </span>
-      </header>
+    <ChartContext.Provider value={openChart}>
+      <div className="app">
+        <header className="topbar">
+          <h1>Market Analyst</h1>
+          <nav className="tabs" aria-label="Sections">
+            {tabLink('today', routes.today, 'Today')}
+            {tabLink('previous', routes.previous(), 'Previous days')}
+          </nav>
+          <span className={`connection ${connected ? 'on' : 'off'}`}>
+            {connected ? 'Live' : 'Reconnecting…'}
+          </span>
+        </header>
 
-      {/* Both tabs stay mounted, so switching keeps a streamed answer or run progress on screen */}
-      <div hidden={route.tab !== 'today'}>
-        <main className="layout">
-          <section className="panel latest" aria-label="Latest report">
-            <h2>Latest report</h2>
-            {latest ? (
-              <ReportView report={latest} current />
-            ) : (
-              <p className="muted">
-                {latestError === 'no reports yet'
-                  ? 'No reports yet. Use "Run update now" to write the first one.'
-                  : latestError || 'Loading…'}
-              </p>
-            )}
-          </section>
+        {/* Both tabs stay mounted, so switching keeps a streamed answer or run progress on screen */}
+        <div hidden={route.tab !== 'today'}>
+          <main className="layout">
+            <section className="panel latest" aria-label="Latest report">
+              <h2>Latest report</h2>
+              {latest ? (
+                <ReportView report={latest} current />
+              ) : (
+                <p className="muted">
+                  {latestError === 'no reports yet'
+                    ? 'No reports yet. Use "Run update now" to write the first one.'
+                    : latestError || 'Loading…'}
+                </p>
+              )}
+            </section>
 
-          <aside className="side">
-            <RunPanel run={run} onStarted={onRunStarted} />
-            <AskPanel />
-          </aside>
-        </main>
+            <aside className="side">
+              <RunPanel run={run} onStarted={onRunStarted} />
+              <AskPanel />
+            </aside>
+          </main>
 
-        <PreviousDaysPreview latestDate={latest?.session_date} lastSaved={lastSaved} />
+          <PreviousDaysPreview latestDate={latest?.session_date} lastSaved={lastSaved} />
+        </div>
+
+        <div hidden={route.tab !== 'previous'}>
+          <PreviousDaysTab latestDate={latest?.session_date} lastSaved={lastSaved} selectedDate={route.date} />
+        </div>
+
+        {chartTicker && <TickerChart ticker={chartTicker} latestDate={latest?.session_date} onClose={closeChart} />}
       </div>
-
-      <div hidden={route.tab !== 'previous'}>
-        <PreviousDaysTab latestDate={latest?.session_date} lastSaved={lastSaved} selectedDate={route.date} />
-      </div>
-    </div>
+    </ChartContext.Provider>
   )
 }

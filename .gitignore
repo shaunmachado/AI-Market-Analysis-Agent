@@ -10,3 +10,6 @@ reports.db-shm
 run.log
 frontend/node_modules/
 frontend/dist/
+search.db
+search.db-wal
+search.db-shm

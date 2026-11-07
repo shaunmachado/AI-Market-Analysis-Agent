@@ -9,7 +9,9 @@ import json
 import sys
 import time
 from contextlib import closing
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -61,6 +63,7 @@ def fresh_state(tmp_path, monkeypatch):
     monkeypatch.setattr(reports_db, "DB_PATH", tmp_path / "reports.db")
     monkeypatch.setattr(api, "hub", api.EventHub())
     monkeypatch.setattr(api, "runs", api.RunManager())
+    monkeypatch.setattr(api, "AUTO_CLOSE", False)  # tests must never start a real after-close run
     reports_db.connect().close()
 
 
@@ -166,6 +169,72 @@ def test_frontend_origin_can_post():
     response = client.post("/api/ask", json={"question": "anything new?"}, headers={"Origin": "http://localhost:5173"})
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+# ---------------------------------------------------------------------------
+# Automatic run after the close
+# ---------------------------------------------------------------------------
+
+ET = ZoneInfo("America/New_York")
+NEW_DAY = {"day": None, "attempts": 0, "done": False, "next_try": None}
+
+
+@pytest.mark.parametrize("when, due", [
+    (datetime(2026, 11, 6, 15, 59, tzinfo=ET), False),   # Friday, before 16:15
+    (datetime(2026, 11, 6, 16, 15, tzinfo=ET), True),    # Friday, 16:15
+    (datetime(2026, 11, 6, 23, 0, tzinfo=ET), True),     # Friday night: still due if it hasn't happened
+    (datetime(2026, 11, 7, 17, 0, tzinfo=ET), False),    # Saturday
+])
+def test_close_run_is_due_on_weekdays_after_the_close(when, due):
+    assert api.close_run_due(when, dict(NEW_DAY)) is due
+
+
+def test_close_run_waits_between_retries_and_stops_after_success_or_three_tries():
+    now = datetime(2026, 11, 6, 17, 0, tzinfo=ET)
+    assert not api.close_run_due(now, {**NEW_DAY, "done": True})
+    assert not api.close_run_due(now, {**NEW_DAY, "next_try": now + timedelta(minutes=5)})
+    assert api.close_run_due(now, {**NEW_DAY, "attempts": 1, "next_try": now - timedelta(minutes=1)})
+    assert not api.close_run_due(now, {**NEW_DAY, "attempts": api.AUTO_CLOSE_MAX_ATTEMPTS})
+
+
+def test_after_close_job_runs_once_per_day_and_retries_failures(monkeypatch):
+    clock = [datetime(2026, 11, 6, 16, 20, tzinfo=ET)]
+    calls = []
+
+    async def job():
+        calls.append(clock[0])
+        if len(calls) == 1:
+            raise RuntimeError("Yahoo was down")
+
+    monkeypatch.setattr(api, "AUTO_CLOSE_CHECK_SECONDS", 0.01)
+    monkeypatch.setattr(api, "close_job", job)
+    monkeypatch.setattr(api.run_brief, "now_et", lambda: clock[0])
+
+    async def scenario():
+        loop = asyncio.create_task(api.run_at_close())
+        await asyncio.sleep(0.1)
+        assert len(calls) == 1                       # failed, so waiting 15 minutes
+        clock[0] += timedelta(minutes=16)
+        await asyncio.sleep(0.1)
+        assert len(calls) == 2                       # retried and succeeded
+        await asyncio.sleep(0.1)
+        assert len(calls) == 2                       # and doesn't run again today
+        clock[0] += timedelta(days=3)                # Monday: a new day
+        await asyncio.sleep(0.1)
+        loop.cancel()
+
+    asyncio.run(scenario())
+
+    assert len(calls) == 3
+
+
+def test_default_close_job_uses_the_run_now_machinery_without_the_cooldown(monkeypatch):
+    monkeypatch.setattr(run_brief, "run_once", fake_run_once())
+    api.runs.last_started = time.monotonic()  # a button press a moment ago would normally block a new run
+
+    asyncio.run(api.run_close_job())
+
+    assert api.runs.state["state"] == "finished" and api.runs.state["result"]["outcome"] == "created"
 
 
 # ---------------------------------------------------------------------------

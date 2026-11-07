@@ -20,6 +20,15 @@ export const listReports = ({ before, limit = 20 } = {}) =>
 
 export const getCurrentRun = () => request('/api/runs/current').then((body) => body.run)
 
+export const getPrices = (ticker, range) =>
+  request(`/api/tickers/${encodeURIComponent(ticker)}/prices?range=${range}`).then((body) => body.prices)
+
+export const searchReports = (q, limit = 12) =>
+  request(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`)
+
+export const getTickerHistory = (ticker, limit = 365) =>
+  request(`/api/tickers/${encodeURIComponent(ticker)}/history?limit=${limit}`).then((body) => body.history)
+
 export async function startRun() {
   const response = await postJSON('/api/runs', {})
   const body = await response.json().catch(() => ({}))

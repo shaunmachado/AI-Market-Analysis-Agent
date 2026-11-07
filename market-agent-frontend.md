@@ -11,15 +11,22 @@ A local web app for the market analyst agent, with two tabs.
 
 **Previous days tab:** every earlier day's report, grouped by month, with the chosen day shown beside the list.
 
+**Charts:** click any ticker in a report's table to open its price chart. Markers show the days it was flagged in your reports, and clicking one opens that day's report.
+
 This builds on `market-agent-database.md`. Finish that guide first, so `reports.db` exists and its tests pass.
 
-**Already built the earlier version of this guide?** The backend is unchanged. In `frontend/src/`:
+**Already built an earlier version of this guide?** All the code is in the [appendix](#appendix-full-source-code).
+
+*Adding charts (this version):*
+
+- **Backend:** add `prices.py` and `tests/test_charts.py`, and replace `api.py`
+- **Frontend** (`frontend/src/`): add `chartContext.js`, `components/PriceChart.jsx` and `components/TickerChart.jsx`. Replace `App.jsx`, `api.js`, `format.js`, `styles.css` and `components/TickerTable.jsx`
+
+*If you also don't have the Previous days tab yet* (`frontend/src/`):
 
 - **Add** `useRoute.js`, `components/PreviousDaysPreview.jsx` and `components/PreviousDaysTab.jsx`
-- **Replace** `App.jsx`, `format.js`, `styles.css`, `components/StatusBadge.jsx` and `components/ReportView.jsx`
+- **Replace** `components/StatusBadge.jsx` and `components/ReportView.jsx`
 - **Delete** `components/PreviousDays.jsx`
-
-All the code is in the [appendix](#appendix-full-source-code).
 
 ---
 
@@ -95,6 +102,35 @@ Every day before the latest report, newest first and grouped by month, 30 at a t
 
 Both tabs stay loaded in the background, so switching tabs never loses a streamed answer or a run's progress. The app works in light and dark mode, and stacks into one column on a phone.
 
+### The chart
+
+Click any row in a report's ticker table, on either tab, and a chart opens over the page:
+
+```
+┌ MSFT ──────────────────────────────────────────────────────── [×] ┐
+│ Daily closing price                                               │
+│ [1M] [3M] [6M] [1Y]                                               │
+│ Latest 292.61     3-month change +11.02%     Flagged in reports 8 │
+│ 300 ┤                                                ▲ 292.61     │
+│ 280 ┤    ╱╲                     ▲  ▲   ╱‾╲_╱‾‾╲_╱‾▲╱              │
+│ 260 ┤ ╱‾‾  ╲      ▲╱‾‾╲  ▼ ╱‾‾‾‾  ╲╱                              │
+│ 240 ┤        ╲__╱       ╲╱                                        │
+│      Aug        Sep            Oct                Nov             │
+│ Days flagged in your reports                                      │
+│ ▲ Wed, Nov 4    +4.32%   z 2.2   0.95×   Open report              │
+│ ...                                                               │
+│ ▸ Daily prices as a table (63 days)                               │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+- **The line** is the daily closing price for 1 month, 3 months (the default), 6 months or a year. While the market is open, the last point is the latest price.
+- **▲ and ▼ markers** are the days the ticker was flagged in your reports: up moves and down moves. The shape shows the direction as well as the color, so it works for colorblind readers.
+- **Hover** (or click into the chart and use the arrow keys) to see each day's close and change. Flagged days also show the report's z-score and volume. **Click a marker** (or press Enter on it) to open that day's report.
+- **The same figures as tables:** the flagged days, with links to their reports, and every daily price under "Daily prices as a table".
+- **Closing it:** the × button, Escape, or a click outside the chart. Focus returns to the ticker you clicked.
+
+Prices come from the same market data source as your reports (yfinance), through a new API endpoint. They're kept for 5 minutes, so reopening a chart is instant. Charts don't use Claude, so they cost nothing.
+
 ### How the pieces connect
 
 ```
@@ -118,8 +154,9 @@ Both tabs stay loaded in the background, so switching tabs never loses a streame
 |---|---|---|
 | `run_brief.py` | **Changed** | Reports each step as it goes, so the app can show progress. The command line works the same |
 | `ask.py` | **New** | Answers questions from saved reports |
-| `api.py` | **Changed** | Adds live updates, Run now, Ask, and serving the built app |
-| `tests/test_frontend_api.py` | **New** | Offline tests for everything above |
+| `prices.py` | **New** | Daily price history for the charts |
+| `api.py` | **Changed** | Adds live updates, Run now, Ask, price history, and serving the built app |
+| `tests/test_frontend_api.py`, `tests/test_charts.py` | **New** | Offline tests for everything above |
 | `frontend/` | **New** | The React app |
 | `market_tools.py`, `reports_db.py`, `analyst_prompt.md`, `watchlist.txt`, `requirements.txt` | Unchanged | |
 
@@ -184,6 +221,8 @@ Claude is told to answer only from that material, to cite report dates, never to
 
 When your history grows large, RAG replaces step 1 and step 2 with a search. Nothing else in the app has to change.
 
+**Also create `prices.py`** with the code from the [appendix](#pricespy). It downloads a ticker's daily closing prices for the charts. It keeps each result for 5 minutes, so reopening a chart doesn't download it again, and adds each day's % change. If a day has no closing price, it's skipped.
+
 ### Step 3: Replace api.py
 
 Replace `api.py` with the version in the [appendix](#apipy). Every endpoint from the database guide still works the same.
@@ -195,6 +234,7 @@ Replace `api.py` with the version in the [appendix](#apipy). Every endpoint from
 | `GET /api/events` and `watch_reports()` | Live updates (section 2) |
 | `POST /api/runs` and `GET /api/runs/current` | Run update now, and its progress for anyone who opens the page mid-run |
 | `POST /api/ask` | Questions, with the answer streamed back |
+| `GET /api/tickers/{ticker}/prices` | Daily prices for the charts |
 | `_post_guard()` | Stops other websites from triggering runs or questions through your browser (section 11) |
 | `create_app()` | Also serves the built React app at `/` once you run `npm run build` |
 
@@ -202,13 +242,13 @@ Report data is still only read through a read-only database connection. The only
 
 ### Step 4: Add and run the backend tests
 
-Create `tests/test_frontend_api.py` with the code from the [appendix](#teststest_frontend_apipy), then run:
+Create `tests/test_frontend_api.py` and `tests/test_charts.py` with the code from the appendix ([1](#teststest_frontend_apipy), [2](#teststest_chartspy)), then run:
 
 ```bash
 pytest -v
 ```
 
-**Expected result:** `74 passed, 1 skipped` (54 from before, plus 20 new). [Section 9](#9-test-it) explains what each new test proves.
+**Expected result:** `81 passed, 1 skipped` (54 from before, plus 27 new). [Section 9](#9-test-it) explains what each new test proves.
 
 ---
 
@@ -245,11 +285,14 @@ In `frontend/src/`, create a `components` folder, then create these files with t
 | [`api.js`](#frontendsrcapijs) | Every call to the API, including reading the streamed answer |
 | [`useLiveEvents.js`](#frontendsrcuseliveeventsjs) | Keeps the live-updates connection open |
 | [`useRoute.js`](#frontendsrcuseroutejs) | Works out which tab and day to show from the page address |
+| [`chartContext.js`](#frontendsrcchartcontextjs) | Lets any ticker table open the chart |
 | [`format.js`](#frontendsrcformatjs) | Formats dates, numbers and links for display |
 | [`styles.css`](#frontendsrcstylescss) | All styling, including dark mode |
 | [`components/StatusBadge.jsx`](#frontendsrccomponentsstatusbadgejsx) | The "Final", "Intraday · updating" and "Intraday (not finalized)" badges |
 | [`components/Markdown.jsx`](#frontendsrccomponentsmarkdownjsx) | Renders a brief safely |
-| [`components/TickerTable.jsx`](#frontendsrccomponentstickertablejsx) | The figures table |
+| [`components/TickerTable.jsx`](#frontendsrccomponentstickertablejsx) | The figures table. Each row opens that ticker's chart |
+| [`components/TickerChart.jsx`](#frontendsrccomponentstickerchartjsx) | The chart dialog: time ranges, summary, flagged days and tables |
+| [`components/PriceChart.jsx`](#frontendsrccomponentspricechartjsx) | The chart itself: price line, flagged-day markers, hover and keyboard readout |
 | [`components/ReportView.jsx`](#frontendsrccomponentsreportviewjsx) | One full report: badge, table, brief and sources |
 | [`components/RunPanel.jsx`](#frontendsrccomponentsrunpaneljsx) | Run update now and its progress |
 | [`components/AskPanel.jsx`](#frontendsrccomponentsaskpaneljsx) | The question box and the streamed answer |
@@ -262,18 +305,20 @@ Your project now looks like this:
 
 ```
 market-agent/
-├── market_tools.py   reports_db.py   run_brief.py   ask.py   api.py
+├── market_tools.py   reports_db.py   run_brief.py   ask.py   prices.py   api.py
 ├── analyst_prompt.md   watchlist.txt   requirements.txt   reports.db
 ├── tests/
-│   ├── test_market_tools.py   test_reports_db.py   test_frontend_api.py
+│   ├── test_market_tools.py   test_reports_db.py   test_frontend_api.py   test_charts.py
 └── frontend/
     ├── index.html   vite.config.js   package.json   node_modules/
     └── src/
-        ├── main.jsx   App.jsx   api.js   useLiveEvents.js   useRoute.js   format.js   styles.css
+        ├── main.jsx   App.jsx   api.js   useLiveEvents.js   useRoute.js   chartContext.js
+        ├── format.js   styles.css
         └── components/
             ├── StatusBadge.jsx   Markdown.jsx   TickerTable.jsx   ReportView.jsx
             ├── RunPanel.jsx   AskPanel.jsx
-            └── PreviousDaysPreview.jsx   PreviousDaysTab.jsx
+            ├── PreviousDaysPreview.jsx   PreviousDaysTab.jsx
+            └── TickerChart.jsx   PriceChart.jsx
 ```
 
 If you use git, add these lines to `.gitignore`:
@@ -328,6 +373,7 @@ Scheduled runs keep working exactly as before. Their reports appear on any open 
 | **Ask about your reports** (Today) | Type a question or pick an example, then press **Ask** (or Enter). The answer appears as it's written, with report dates cited. The line underneath shows how many reports it used and what it cost. |
 | **Previous days preview** (Today) | The 3 days before the latest report, with their flagged tickers. Click a card to read that day, or **See all previous days →** for the full list. |
 | **Previous days tab** | Every day before the latest one, grouped by month. Click a day to read it; use **Load older days** for more. Copy the address to bookmark or share a day. |
+| **Charts** (both tabs) | Click any row in a ticker table. Choose 1M, 3M, 6M or 1Y; hover for each day's close; click a ▲ or ▼ marker to open the report for a day the ticker was flagged. Close with ×, Escape or a click outside. |
 
 **Badges:** "Final" is a finished, permanent report. "Intraday · updating" is today's report while the market is open. "Intraday (not finalized)" on an older day means no run happened while the market was closed afterwards, so its final report was never written (for example, the computer was off overnight). It won't change any more.
 
@@ -344,7 +390,7 @@ Set these environment variables in the API's terminal before starting uvicorn:
 | `FRONTEND_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Website addresses allowed to call the API, including Run now and Ask |
 | `REPORTS_DB` | `reports.db` in the project folder | Database location (from the database guide) |
 
-The question settings live at the top of `ask.py`: `RECENT_REPORTS`, `FLAGGED_REPORTS_PER_TICKER`, `MAX_CONTEXT_CHARS`, and the `max_budget_usd` cost cap.
+The question settings live at the top of `ask.py`: `RECENT_REPORTS`, `FLAGGED_REPORTS_PER_TICKER`, `MAX_CONTEXT_CHARS`, and the `max_budget_usd` cost cap. How long chart prices are kept (`CACHE_SECONDS`, 5 minutes) is at the top of `prices.py`.
 
 **Costs:**
 
@@ -352,7 +398,7 @@ The question settings live at the top of `ask.py`: `RECENT_REPORTS`, `FLAGGED_RE
 |---|---|
 | Run update now | One agent run, the same as a scheduled run (capped at $1). Free if the final report already exists |
 | Ask a question | One Claude call, capped at $0.25. Shown under each answer |
-| Reading reports, live updates, Previous days | Free (no Claude calls) |
+| Reading reports, live updates, Previous days, charts | Free (no Claude calls) |
 
 ---
 
@@ -364,7 +410,7 @@ The question settings live at the top of `ask.py`: `RECENT_REPORTS`, `FLAGGED_RE
 pytest -v
 ```
 
-Expect `74 passed, 1 skipped`. They need no internet or API key: Claude, market data and the database are all replaced with test versions.
+Expect `81 passed, 1 skipped`. They need no internet or API key: Claude, market data and the database are all replaced with test versions.
 
 **What the new tests prove (`tests/test_frontend_api.py`):**
 
@@ -386,6 +432,17 @@ Expect `74 passed, 1 skipped`. They need no internet or API key: Claude, market 
 | `test_ask_rejects_bad_questions` (4 cases), `test_ask_rejects_broken_json` | Empty, too-long or malformed questions get a 400 |
 | `test_built_frontend_is_served_alongside_the_api` | After `npm run build`, the API serves the app at `/` and the API still works |
 
+**What the chart tests prove (`tests/test_charts.py`):**
+
+| Test | Proves that |
+|---|---|
+| `test_prices_endpoint_returns_daily_closes_with_changes` | Prices come back oldest first, with each day's % change, and the ticker isn't case-sensitive |
+| `test_default_range_is_three_months` | With no range given, the chart gets 3 months |
+| `test_prices_are_cached_between_clicks` | Reopening the same chart doesn't download it again, but a new range does |
+| `test_prices_reject_bad_requests` (2 cases) | An invalid ticker or range gets a clear 400 |
+| `test_prices_report_data_problems_clearly` | A download failure gets a 502 with the reason; an unknown ticker gets a 404 |
+| `test_fetch_prices_reads_yfinance_data` | Days with no closing price are skipped and missing volume counts as 0, since Yahoo data sometimes has gaps |
+
 **What was also tested before this guide was written:** the React app was built and driven in a real Chromium browser against the real API, with Claude and market data faked and 40 days of sample reports. All of these passed, with no browser errors:
 
 1. The Today tab shows the latest report and the "Live" connection; the Previous days tab starts hidden.
@@ -403,6 +460,22 @@ Expect `74 passed, 1 skipped`. They need no internet or API key: Claude, market 
 13. At phone width, neither tab scrolls sideways, and picking a day scrolls down to its report.
 14. Dark mode renders correctly.
 
+**The charts** were driven the same way, over two months of sample data from the test environment (`market-agent-test-enviro.md`), with no browser errors:
+
+1. Clicking anywhere on a ticker's row opens its chart, and focus moves into the dialog.
+2. The 3-month chart has one price line, month labels on the axis, and one marker per flagged day. These match the "Flagged in reports" count and the table.
+3. Hovering shows a crosshair and that day's close. A flagged day also says "Flagged in report", with its z-score and volume.
+4. 1M, 1Y and 3M switch between 21, 252 and 63 days.
+5. In the chart, the arrow keys, Home and End move through the days, with the same readout as hovering.
+6. Escape closes the chart, and focus returns to the ticker.
+7. Enter on the ticker reopens it, Tab stays inside the dialog, and clicking outside closes it.
+8. Clicking a flagged day on the chart opens that day's report on the Previous days tab.
+9. Ticker rows on the Previous days tab open charts too, and "Open report" links work.
+10. At phone width the chart fits inside the dialog with no sideways scrolling.
+11. Dark mode uses its own chart colors.
+
+The chart colors were checked with a palette validator for light and dark backgrounds. The line and markers are clearly distinct for full-color vision. For colorblind readers, the up and down marker colors are only moderately distinct, which is why the ▲/▼ shapes and the tables carry direction too.
+
 **Not yet tested:** Vite's own dev server and proxy (the browser test bundled the app with a different tool), and runs and answers from real Claude. The checks below cover both.
 
 ### 9.2 Manual checks on your machine
@@ -417,6 +490,8 @@ Expect `74 passed, 1 skipped`. They need no internet or API key: Claude, market 
 - [ ] The Today tab's preview shows the 3 days before the latest report, and clicking a card opens that day on the Previous days tab
 - [ ] The Previous days tab lists every earlier day by month, and **Load older days** appears once you have more than 30
 - [ ] Copying the address of an open day into a new browser tab opens the same day, and the Back button moves between days and tabs
+- [ ] Clicking a ticker row opens a chart with real prices. The latest point matches the report's price (during market hours, allow for the 5-minute cache)
+- [ ] Clicking a ▲ or ▼ marker opens the report for that day
 - [ ] After `npm run build` and restarting the API, http://localhost:8000 shows the same app
 
 ---
@@ -468,6 +543,32 @@ Send `{}` with `Content-Type: application/json`.
 | `409` | A run is already in progress |
 | `429` | The cooldown hasn't passed. The error message says how long to wait |
 | `403` / `415` | Blocked by the safety check (section 11) |
+
+### `GET /api/tickers/{TICKER}/prices`: chart data
+
+Daily closing prices, oldest first. The optional `range` is `1mo`, `3mo` (default), `6mo` or `1y`.
+
+```json
+{
+  "ticker": "NVDA",
+  "range": "1mo",
+  "prices": [
+    {"date": "2026-10-09", "close": 67.38, "volume": 43325731, "change_pct": null},
+    {"date": "2026-10-12", "close": 72.30, "volume": 45780765, "change_pct": 7.3}
+  ]
+}
+```
+
+`change_pct` is the change from the previous day's close (`null` on the first day). Results are kept for 5 minutes.
+
+| Status | Meaning |
+|---|---|
+| `200` | The prices |
+| `400` | An invalid ticker or range |
+| `404` | No price data for that ticker (often a symbol format issue, such as `BRK-B`) |
+| `502` | The market data source failed. The error message gives the reason |
+
+For the days a ticker was flagged, use the existing `/api/tickers/{TICKER}/history`.
 
 ### `GET /api/runs/current`
 
@@ -533,13 +634,18 @@ or, if something goes wrong, `{"type": "error", "error": "..."}`.
 | The preview shows fewer than 3 days | There are fewer than 3 days before the latest report so far. |
 | An older day says **Intraday (not finalized)** | No run happened while the market was closed after that day, so its final report was never written. Keep the computer on for the morning run (or run the agent after the close). Later days aren't affected. |
 | The page opens on the wrong tab | The address ends in `#/previous`. Click **Today**, or remove everything from `#` onwards. |
-| Tests fail with `ModuleNotFoundError: ask` | Create `ask.py` in the project folder (Step 2). |
+| Tests fail with `ModuleNotFoundError: ask` or `prices` | Create `ask.py` and `prices.py` in the project folder (Step 2). |
+| The chart says **couldn't load prices for …** | The market data source failed (network or rate limiting). Close the chart and try again in a minute. |
+| The chart says **no price data for …** | That symbol has no data on Yahoo. Check its format (`BRK-B`, not `BRK.B`). |
+| A chart has no ▲/▼ markers | That ticker wasn't flagged in any report in the selected range. Try a longer range. |
+| The chart's latest point differs slightly from the report | Prices are kept for 5 minutes, and during market hours the price keeps moving. Reopen the chart after a few minutes. |
+| Clicking a ticker does nothing | The frontend is an older version. Check `TickerTable.jsx`, `App.jsx` and `chartContext.js` match the appendix, and that the API has the `prices` endpoint (restart uvicorn after updating `api.py`). |
 
 ---
 
 ## 13. Next steps
 
-1. **Charts and filters:** `/api/tickers/{ticker}/history` already returns each ticker's figures across days. A chart under each flagged ticker, or a "days this ticker was flagged" filter on the Previous days tab, are natural next additions.
+1. **Filters and comparisons:** a "days this ticker was flagged" filter on the Previous days tab, or comparing two tickers indexed to 100 on one chart.
 2. **Search and RAG:** once you have a few months of reports, replace the report selection in `ask.py` with search. Start with keyword search, then add vector search (the RAG plan we discussed).
 3. **Login:** add one before sharing beyond your computer (section 11).
 4. **Hosting:** run the API and the built frontend on a small server, move the database to PostgreSQL, and switch the scheduled runs from your laptop to the server.
@@ -843,6 +949,46 @@ async def answer(question: str, emit) -> dict:
     return event
 ```
 
+### prices.py
+
+```python
+"""Daily price history for the charts, from Yahoo Finance (yfinance).
+
+Results are kept for a few minutes, so opening the same chart again doesn't
+download it again. The test environment swaps fetch_prices() for simulated prices.
+"""
+
+import time
+
+import yfinance as yf
+
+RANGES = ("1mo", "3mo", "6mo", "1y")
+CACHE_SECONDS = 300
+_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+
+
+def fetch_prices(ticker: str, period: str) -> list[dict]:
+    """Daily closes and volume, oldest first. While the market is open, the last
+    row is today's price so far."""
+    df = yf.Ticker(ticker).history(period=period, interval="1d").dropna(subset=["Close"])
+    return [{"date": ts.date().isoformat(), "close": round(float(close), 2), "volume": int(volume or 0)}
+            for ts, close, volume in zip(df.index, df["Close"], df["Volume"].fillna(0))]
+
+
+def get_prices(ticker: str, period: str) -> list[dict]:
+    """fetch_prices(), cached, with each day's % change from the day before."""
+    key = (ticker.upper(), period)
+    cached = _cache.get(key)
+    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+        return cached[1]
+    rows = fetch_prices(*key)
+    for previous, row in zip([None] + rows, rows):
+        row["change_pct"] = round((row["close"] / previous["close"] - 1) * 100, 2) if previous else None
+    if rows:
+        _cache[key] = (time.monotonic(), rows)
+    return rows
+```
+
 ### api.py
 
 Replaces the version in the database guide.
@@ -859,6 +1005,7 @@ Endpoints:
     GET  /api/reports/latest
     GET  /api/reports/{YYYY-MM-DD}
     GET  /api/tickers/{TICKER}/history?limit=30
+    GET  /api/tickers/{TICKER}/prices?range=1mo|3mo|6mo|1y   daily prices for charts
     GET  /api/events            live updates (Server-Sent Events)
     GET  /api/runs/current      the on-demand run in progress, or the last one
     POST /api/runs              write a fresh report now
@@ -886,6 +1033,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 import ask
+import prices
 import reports_db
 import run_brief
 
@@ -973,6 +1121,24 @@ def ticker_history(request):
     with _db() as conn:
         history = reports_db.ticker_history(conn, ticker, limit)
     return JSONResponse({"ticker": ticker.upper(), "history": history})
+
+
+def ticker_prices(request):
+    """Daily closing prices for a chart. Runs in a worker thread, so a slow download
+    doesn't hold up anything else."""
+    ticker = request.path_params["ticker"]
+    period = request.query_params.get("range", "3mo")
+    if not TICKER.fullmatch(ticker):
+        return _error(400, "invalid ticker")
+    if period not in prices.RANGES:
+        return _error(400, f"range must be one of: {', '.join(prices.RANGES)}")
+    try:
+        rows = prices.get_prices(ticker.upper(), period)
+    except Exception as e:  # network problem, rate limit, unknown ticker...
+        return _error(502, f"couldn't load prices for {ticker.upper()} ({e})")
+    if not rows:
+        return _error(404, f"no price data for {ticker.upper()}")
+    return JSONResponse({"ticker": ticker.upper(), "range": period, "prices": rows})
 
 
 # ---------------------------------------------------------------------------
@@ -1193,6 +1359,7 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> Starlette:
         Route("/api/reports/latest", latest_report),  # must come before the {session_date} route
         Route("/api/reports/{session_date}", get_report),
         Route("/api/tickers/{ticker}/history", ticker_history),
+        Route("/api/tickers/{ticker}/prices", ticker_prices),
         Route("/api/events", events),
         Route("/api/runs", start_run, methods=["POST"]),
         Route("/api/runs/current", current_run),
@@ -1538,6 +1705,115 @@ def test_built_frontend_is_served_alongside_the_api(tmp_path):
     assert client.get("/api/health").json()["status"] == "ok"
 ```
 
+### tests/test_charts.py
+
+```python
+"""Offline tests for the chart data: prices.py and /api/tickers/{ticker}/prices.
+
+Run from the project folder:
+    pytest -v tests/test_charts.py
+"""
+
+import math
+import sys
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import api  # noqa: E402
+import prices  # noqa: E402
+import reports_db  # noqa: E402
+from starlette.testclient import TestClient  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(reports_db, "DB_PATH", tmp_path / "reports.db")
+    prices._cache.clear()
+
+
+@pytest.fixture
+def fake_prices(monkeypatch):
+    """Replace the download with three days of prices; returns a log of calls."""
+    calls = []
+
+    def fetch(ticker, period):
+        calls.append((ticker, period))
+        return [{"date": "2026-11-04", "close": 100.0, "volume": 1_000},
+                {"date": "2026-11-05", "close": 110.0, "volume": 3_000},
+                {"date": "2026-11-06", "close": 99.0, "volume": 2_000}]
+
+    monkeypatch.setattr(prices, "fetch_prices", fetch)
+    return calls
+
+
+def test_prices_endpoint_returns_daily_closes_with_changes(fake_prices):
+    data = TestClient(api.app).get("/api/tickers/nvda/prices?range=1mo").json()
+
+    assert data["ticker"] == "NVDA" and data["range"] == "1mo"
+    assert [p["close"] for p in data["prices"]] == [100.0, 110.0, 99.0]
+    assert [p["change_pct"] for p in data["prices"]] == [None, 10.0, -10.0]
+    assert fake_prices == [("NVDA", "1mo")]
+
+
+def test_default_range_is_three_months(fake_prices):
+    assert TestClient(api.app).get("/api/tickers/AAPL/prices").json()["range"] == "3mo"
+
+
+def test_prices_are_cached_between_clicks(fake_prices):
+    client = TestClient(api.app)
+    client.get("/api/tickers/NVDA/prices?range=6mo")
+    client.get("/api/tickers/nvda/prices?range=6mo")
+    client.get("/api/tickers/NVDA/prices?range=1y")
+    assert fake_prices == [("NVDA", "6mo"), ("NVDA", "1y")]  # the repeat came from the cache
+
+
+@pytest.mark.parametrize("path", ["/api/tickers/not%20a%20ticker/prices", "/api/tickers/NVDA/prices?range=5y"])
+def test_prices_reject_bad_requests(fake_prices, path):
+    response = TestClient(api.app).get(path)
+    assert response.status_code == 400 and "error" in response.json()
+
+
+def test_prices_report_data_problems_clearly(monkeypatch):
+    client = TestClient(api.app)
+
+    def broken(ticker, period):
+        raise ConnectionError("rate limited")
+
+    monkeypatch.setattr(prices, "fetch_prices", broken)
+    failed = client.get("/api/tickers/NVDA/prices")
+    assert failed.status_code == 502 and "rate limited" in failed.json()["error"]
+
+    monkeypatch.setattr(prices, "fetch_prices", lambda ticker, period: [])
+    missing = client.get("/api/tickers/ZZZZ/prices")
+    assert missing.status_code == 404 and "no price data" in missing.json()["error"]
+
+
+def test_fetch_prices_reads_yfinance_data(monkeypatch):
+    """Missing closes are skipped and missing volume counts as 0, as Yahoo sometimes has gaps."""
+    index = pd.date_range("2026-11-02", periods=4, freq="B", tz="America/New_York")
+    frame = pd.DataFrame({"Close": [100.123, math.nan, 101.0, 102.5], "Volume": [10.0, 20.0, math.nan, 40.0]},
+                         index=index)
+
+    class FakeTicker:
+        def __init__(self, ticker):
+            pass
+
+        def history(self, period, interval):
+            assert interval == "1d"
+            return frame
+
+    monkeypatch.setattr(prices.yf, "Ticker", FakeTicker)
+
+    assert prices.fetch_prices("NVDA", "1mo") == [
+        {"date": "2026-11-02", "close": 100.12, "volume": 10},
+        {"date": "2026-11-04", "close": 101.0, "volume": 0},
+        {"date": "2026-11-05", "close": 102.5, "volume": 40},
+    ]
+```
+
 ### frontend/vite.config.js
 
 ```js
@@ -1593,8 +1869,9 @@ createRoot(document.getElementById('root')).render(
 ### frontend/src/App.jsx
 
 ```jsx
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getCurrentRun, getLatestReport } from './api'
+import { ChartContext } from './chartContext'
 import { useLiveEvents } from './useLiveEvents'
 import { routes, useRoute } from './useRoute'
 import AskPanel from './components/AskPanel'
@@ -1602,6 +1879,7 @@ import PreviousDaysPreview from './components/PreviousDaysPreview'
 import PreviousDaysTab from './components/PreviousDaysTab'
 import ReportView from './components/ReportView'
 import RunPanel from './components/RunPanel'
+import TickerChart from './components/TickerChart'
 
 export default function App() {
   const route = useRoute()
@@ -1609,6 +1887,17 @@ export default function App() {
   const [latestError, setLatestError] = useState(null)
   const [run, setRun] = useState(null)
   const [lastSaved, setLastSaved] = useState(null) // tells the previous-days views to refresh
+  const [chartTicker, setChartTicker] = useState(null)
+  const chartOpener = useRef(null) // gets focus back when the chart closes
+
+  const openChart = useCallback((ticker, opener) => {
+    chartOpener.current = opener
+    setChartTicker(ticker)
+  }, [])
+  const closeChart = useCallback(() => {
+    setChartTicker(null)
+    setTimeout(() => chartOpener.current?.focus(), 0)
+  }, [])
 
   const loadLatest = useCallback(() => {
     getLatestReport()
@@ -1653,47 +1942,51 @@ export default function App() {
   )
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <h1>Market Analyst</h1>
-        <nav className="tabs" aria-label="Sections">
-          {tabLink('today', routes.today, 'Today')}
-          {tabLink('previous', routes.previous(), 'Previous days')}
-        </nav>
-        <span className={`connection ${connected ? 'on' : 'off'}`}>
-          {connected ? 'Live' : 'Reconnecting…'}
-        </span>
-      </header>
+    <ChartContext.Provider value={openChart}>
+      <div className="app">
+        <header className="topbar">
+          <h1>Market Analyst</h1>
+          <nav className="tabs" aria-label="Sections">
+            {tabLink('today', routes.today, 'Today')}
+            {tabLink('previous', routes.previous(), 'Previous days')}
+          </nav>
+          <span className={`connection ${connected ? 'on' : 'off'}`}>
+            {connected ? 'Live' : 'Reconnecting…'}
+          </span>
+        </header>
 
-      {/* Both tabs stay mounted, so switching keeps a streamed answer or run progress on screen */}
-      <div hidden={route.tab !== 'today'}>
-        <main className="layout">
-          <section className="panel latest" aria-label="Latest report">
-            <h2>Latest report</h2>
-            {latest ? (
-              <ReportView report={latest} current />
-            ) : (
-              <p className="muted">
-                {latestError === 'no reports yet'
-                  ? 'No reports yet. Use "Run update now" to write the first one.'
-                  : latestError || 'Loading…'}
-              </p>
-            )}
-          </section>
+        {/* Both tabs stay mounted, so switching keeps a streamed answer or run progress on screen */}
+        <div hidden={route.tab !== 'today'}>
+          <main className="layout">
+            <section className="panel latest" aria-label="Latest report">
+              <h2>Latest report</h2>
+              {latest ? (
+                <ReportView report={latest} current />
+              ) : (
+                <p className="muted">
+                  {latestError === 'no reports yet'
+                    ? 'No reports yet. Use "Run update now" to write the first one.'
+                    : latestError || 'Loading…'}
+                </p>
+              )}
+            </section>
 
-          <aside className="side">
-            <RunPanel run={run} onStarted={onRunStarted} />
-            <AskPanel />
-          </aside>
-        </main>
+            <aside className="side">
+              <RunPanel run={run} onStarted={onRunStarted} />
+              <AskPanel />
+            </aside>
+          </main>
 
-        <PreviousDaysPreview latestDate={latest?.session_date} lastSaved={lastSaved} />
+          <PreviousDaysPreview latestDate={latest?.session_date} lastSaved={lastSaved} />
+        </div>
+
+        <div hidden={route.tab !== 'previous'}>
+          <PreviousDaysTab latestDate={latest?.session_date} lastSaved={lastSaved} selectedDate={route.date} />
+        </div>
+
+        {chartTicker && <TickerChart ticker={chartTicker} latestDate={latest?.session_date} onClose={closeChart} />}
       </div>
-
-      <div hidden={route.tab !== 'previous'}>
-        <PreviousDaysTab latestDate={latest?.session_date} lastSaved={lastSaved} selectedDate={route.date} />
-      </div>
-    </div>
+    </ChartContext.Provider>
   )
 }
 ```
@@ -1722,6 +2015,12 @@ export const listReports = ({ before, limit = 20 } = {}) =>
   request(`/api/reports?limit=${limit}${before ? `&before=${before}` : ''}`).then((body) => body.reports)
 
 export const getCurrentRun = () => request('/api/runs/current').then((body) => body.run)
+
+export const getPrices = (ticker, range) =>
+  request(`/api/tickers/${encodeURIComponent(ticker)}/prices?range=${range}`).then((body) => body.prices)
+
+export const getTickerHistory = (ticker, limit = 365) =>
+  request(`/api/tickers/${encodeURIComponent(ticker)}/history?limit=${limit}`).then((body) => body.history)
 
 export async function startRun() {
   const response = await postJSON('/api/runs', {})
@@ -1813,6 +2112,18 @@ export function useRoute() {
 }
 ```
 
+### frontend/src/chartContext.js
+
+```js
+import { createContext, useContext } from 'react'
+
+// Lets any ticker table open the chart, without passing a function through every component.
+// openChart(ticker, element): element gets focus back when the chart closes.
+export const ChartContext = createContext(() => {})
+
+export const useOpenChart = () => useContext(ChartContext)
+```
+
 ### frontend/src/format.js
 
 ```js
@@ -1825,6 +2136,12 @@ export const formatDate = (day) =>
 
 export const formatMonth = (day) =>
   new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+
+export const formatShortDate = (day) =>
+  new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+
+export const formatMonthShort = (day) =>
+  new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'short' })
 
 export const formatTime = (utc) =>
   utc ? new Date(utc).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : ''
@@ -1855,6 +2172,10 @@ export const safeUrl = (url) => (/^https?:\/\//i.test(url || '') ? url : undefin
   --final: #1f6f43;
   --final-bg: #dcfce7;
   --flagged-bg: #fff7ed;
+  --series-1: #2a78d6;   /* chart line (validated palette, light) */
+  --grid: #e6e9ee;
+  --mark-up: #12805c;    /* flagged-day markers; shape (▲▼) carries direction too */
+  --mark-down: #c0392b;
   --radius: 10px;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color: var(--text);
@@ -1878,6 +2199,10 @@ export const safeUrl = (url) => (/^https?:\/\//i.test(url || '') ? url : undefin
     --final: #4ade80;
     --final-bg: #0d2e1b;
     --flagged-bg: #2a1d0f;
+    --series-1: #3987e5;  /* stepped for the dark surface, validated separately */
+    --grid: #252d37;
+    --mark-up: #1f9d63;
+    --mark-down: #e66767;
   }
 }
 
@@ -1990,6 +2315,71 @@ textarea {
 .day.active { border-color: var(--accent); background: var(--bg); }
 .day-date { font-weight: 600; }
 .day-meta { font-size: 0.8rem; color: var(--muted); }
+
+/* Ticker rows open a chart */
+.tickers tr.clickable { cursor: pointer; }
+.tickers tr.clickable:hover td { background: var(--bg); }
+.ticker-button {
+  all: unset; cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px;
+}
+.ticker-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chart-icon { color: var(--muted); }
+
+/* Chart dialog */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 16px;
+  background: rgb(0 0 0 / 0.45);
+}
+.modal {
+  width: min(880px, 100%); max-height: calc(100vh - 32px); overflow: auto; padding: 20px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgb(0 0 0 / 0.25);
+}
+.modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.modal-head h2 { margin: 0; font-size: 1.4rem; }
+.close {
+  width: 36px; height: 36px; font-size: 1.3rem; line-height: 1; color: var(--text);
+  background: transparent; border: 1px solid var(--border); border-radius: 8px;
+}
+.range-row { display: flex; gap: 4px; margin: 12px 0; }
+.range {
+  padding: 4px 12px; font-size: 0.85rem; font-weight: 600; color: var(--text);
+  background: transparent; border: 1px solid var(--border); border-radius: 8px;
+}
+.range.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.chart-stats { display: flex; gap: 32px; flex-wrap: wrap; margin-bottom: 8px; }
+.chart-stats div { display: grid; }
+.chart-stats strong { font-size: 1.25rem; }
+.refreshing { opacity: 0.5; transition: opacity 0.2s; } /* keeps the old chart while a new range loads */
+.table-title { font-size: 0.9rem; margin: 16px 0 6px; }
+@media (max-width: 760px) {
+  .modal { padding: 14px; }
+  .chart-stats { gap: 16px; }
+}
+
+/* The price chart */
+.price-chart { position: relative; outline: none; border-radius: 8px; }
+.price-chart:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.price-chart svg { display: block; }
+.grid { stroke: var(--grid); stroke-width: 1; }
+.axis-label { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.price-line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.crosshair { stroke: var(--muted); stroke-width: 1; }
+/* Dots and markers get a 2px ring in the surface color, so they stay clear where they cross the line */
+.end-dot, .hover-dot, .flag-marker { stroke: var(--panel); stroke-width: 4; paint-order: stroke; }
+.end-dot, .hover-dot { fill: var(--series-1); }
+.flag-marker.up { fill: var(--mark-up); }
+.flag-marker.down { fill: var(--mark-down); }
+.end-label { fill: var(--text); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.hit-area { fill: transparent; }
+.hit-area.clickable { cursor: pointer; }
+.chart-tooltip {
+  position: absolute; top: 8px; pointer-events: none; display: grid; gap: 2px; min-width: 150px; max-width: 240px;
+  padding: 8px 10px; font-size: 0.85rem; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.12);
+}
+.chart-tooltip strong { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.tip-flag { display: grid; gap: 2px; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
 ```
 
 ### frontend/src/components/StatusBadge.jsx
@@ -2038,9 +2428,18 @@ export default function Markdown({ text }) {
 ### frontend/src/components/TickerTable.jsx
 
 ```jsx
+import { useOpenChart } from '../chartContext'
 import { number, percent } from '../format'
 
+const ChartIcon = () => (
+  <svg className="chart-icon" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <polyline points="1,10 4,6 7,8 11,2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+// Click a row (or Tab to its ticker and press Enter) to open that ticker's chart
 export default function TickerTable({ tickers }) {
+  const openChart = useOpenChart()
   if (!tickers?.length) return null
   return (
     <div className="table-wrap">
@@ -2057,8 +2456,16 @@ export default function TickerTable({ tickers }) {
         </thead>
         <tbody>
           {tickers.map((t) => (
-            <tr key={t.ticker} className={t.category}>
-              <td className="ticker">{t.ticker}</td>
+            <tr
+              key={t.ticker}
+              className={`${t.category} clickable`}
+              onClick={(e) => openChart(t.ticker, e.currentTarget.querySelector('button'))}
+            >
+              <td className="ticker">
+                <button type="button" className="ticker-button" aria-label={`Show ${t.ticker} chart`} title="Show chart">
+                  {t.ticker} <ChartIcon />
+                </button>
+              </td>
               <td>{t.category === 'error' ? <span title={t.error}>data issue</span> : t.category}</td>
               <td className="num">{number(t.price, 2)}</td>
               <td className={`num ${t.return_1d_pct > 0 ? 'up' : t.return_1d_pct < 0 ? 'down' : ''}`}>
@@ -2462,6 +2869,346 @@ export default function PreviousDaysTab({ latestDate, lastSaved, selectedDate })
         </div>
       )}
     </section>
+  )
+}
+```
+
+### frontend/src/components/TickerChart.jsx
+
+```jsx
+import { useEffect, useRef, useState } from 'react'
+import { getPrices, getTickerHistory } from '../api'
+import { formatDate, number, percent } from '../format'
+import { routes } from '../useRoute'
+import PriceChart from './PriceChart'
+
+const RANGES = [['1mo', '1M', '1-month'], ['3mo', '3M', '3-month'], ['6mo', '6M', '6-month'], ['1y', '1Y', '1-year']]
+
+// A dialog with one ticker's price chart, the days it was flagged in your reports,
+// and the same figures as tables.
+export default function TickerChart({ ticker, latestDate, onClose }) {
+  const [range, setRange] = useState('3mo')
+  const [prices, setPrices] = useState(null)
+  const [flags, setFlags] = useState([])
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const dialog = useRef(null)
+  const closeButton = useRef(null)
+
+  // Focus the close button, keep Tab inside the dialog, close on Escape, and stop the page scrolling behind
+  useEffect(() => {
+    closeButton.current?.focus()
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Tab') return
+      const focusable = dialog.current.querySelectorAll('button, [href], summary, [tabindex="0"]')
+      const [first, last] = [focusable[0], focusable[focusable.length - 1]]
+      if (e.shiftKey && document.activeElement === first) {
+        last.focus()
+        e.preventDefault()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        first.focus()
+        e.preventDefault()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    const overflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = overflow
+    }
+  }, [onClose])
+
+  useEffect(() => {
+    let current = true // ignore a slow answer for a range that's no longer selected
+    setLoading(true)
+    getPrices(ticker, range)
+      .then((rows) => {
+        if (current) {
+          setPrices(rows)
+          setError(null)
+        }
+      })
+      .catch((e) => {
+        if (current) setError(e.message)
+      })
+      .finally(() => {
+        if (current) setLoading(false)
+      })
+    return () => {
+      current = false
+    }
+  }, [ticker, range])
+
+  useEffect(() => {
+    getTickerHistory(ticker)
+      .then((history) => setFlags(history.filter((d) => d.category === 'flagged')))
+      .catch(() => setFlags([]))
+  }, [ticker])
+
+  const openDay = (day) => {
+    window.location.hash = day === latestDate ? routes.today : routes.previous(day)
+    onClose()
+  }
+
+  const first = prices?.[0]
+  const last = prices?.at(-1)
+  const shown = prices ? flags.filter((f) => f.session_date >= first.date && f.session_date <= last.date) : []
+  const change = prices?.length > 1 ? (last.close / first.close - 1) * 100 : null
+  const rangeName = RANGES.find(([value]) => value === range)[2]
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="chart-title" ref={dialog}>
+        <div className="modal-head">
+          <div>
+            <h2 id="chart-title">{ticker}</h2>
+            <span className="muted small">Daily closing price</span>
+          </div>
+          <button ref={closeButton} className="close" onClick={onClose} aria-label="Close chart">×</button>
+        </div>
+
+        <div className="range-row" role="group" aria-label="Time range">
+          {RANGES.map(([value, label, name]) => (
+            <button
+              key={value}
+              className={`range ${range === value ? 'active' : ''}`}
+              aria-pressed={range === value}
+              aria-label={name}
+              onClick={() => setRange(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {prices && (
+          <div className="chart-stats">
+            <div><span className="muted small">Latest</span><strong>{number(last.close, 2)}</strong></div>
+            <div>
+              <span className="muted small">{rangeName} change</span>
+              <strong className={change > 0 ? 'up' : change < 0 ? 'down' : ''}>{percent(change)}</strong>
+            </div>
+            <div><span className="muted small">Flagged in reports</span><strong>{shown.length} day{shown.length === 1 ? '' : 's'}</strong></div>
+          </div>
+        )}
+
+        {error && <p className="error">{error}</p>}
+        {!prices && !error && <p className="muted">Loading…</p>}
+        {prices && (
+          <div className={loading ? 'refreshing' : ''}>
+            <PriceChart ticker={ticker} prices={prices} flags={shown} onOpenDay={openDay} />
+          </div>
+        )}
+
+        {prices && (
+          <>
+            <h3 className="table-title">Days flagged in your reports</h3>
+            {shown.length === 0 ? (
+              <p className="muted small">None in this range.</p>
+            ) : (
+              <div className="table-wrap">
+                <table className="tickers">
+                  <thead>
+                    <tr><th>Date</th><th className="num">Change</th><th className="num">z-score</th><th className="num">Volume</th><th /></tr>
+                  </thead>
+                  <tbody>
+                    {[...shown].reverse().map((f) => (
+                      <tr key={f.session_date}>
+                        <td>{f.return_1d_pct >= 0 ? '▲' : '▼'} {formatDate(f.session_date)}</td>
+                        <td className={`num ${f.return_1d_pct > 0 ? 'up' : f.return_1d_pct < 0 ? 'down' : ''}`}>{percent(f.return_1d_pct)}</td>
+                        <td className="num">{number(f.return_zscore, 1)}</td>
+                        <td className="num">{f.volume_vs_avg == null ? '—' : `${f.volume_vs_avg}×`}</td>
+                        <td><a className="link" href={f.session_date === latestDate ? routes.today : routes.previous(f.session_date)} onClick={onClose}>Open report</a></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <details className="sources">
+              <summary>Daily prices as a table ({prices.length} days)</summary>
+              <div className="table-wrap">
+                <table className="tickers">
+                  <thead><tr><th>Date</th><th className="num">Close</th><th className="num">Change</th></tr></thead>
+                  <tbody>
+                    {[...prices].reverse().map((p) => (
+                      <tr key={p.date}>
+                        <td>{formatDate(p.date)}</td>
+                        <td className="num">{number(p.close, 2)}</td>
+                        <td className="num">{percent(p.change_pct)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+            <p className="muted small">
+              Daily closes from your market data source; while the market is open, the last point is the latest price.
+              Markers ▲▼ show days {ticker} was flagged in your reports.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+```
+
+### frontend/src/components/PriceChart.jsx
+
+```jsx
+import { useEffect, useRef, useState } from 'react'
+import { formatDate, formatMonthShort, formatShortDate, number, percent } from '../format'
+
+const PLOT_HEIGHT = 220
+const PAD = { top: 16, right: 64, bottom: 30, left: 52 } // bottom = the x-axis label band
+const MIN_TICK_GAP = 48 // px between x-axis labels
+
+// Round, evenly spaced y-axis values that cover min..max
+function niceTicks(min, max, count = 5) {
+  const span = max - min || Math.abs(max) || 1
+  const raw = span / (count - 1)
+  const magnitude = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= raw)
+  const ticks = []
+  for (let v = Math.floor(min / step) * step; v <= Math.ceil(max / step) * step + step / 2; v += step) {
+    ticks.push(Number(v.toFixed(6)))
+  }
+  return ticks
+}
+
+// One price line, with a marker on each day the ticker was flagged in a report.
+// prices: [{date, close, change_pct}], oldest first. flags: report rows for flagged days.
+export default function PriceChart({ ticker, prices, flags, onOpenDay }) {
+  const box = useRef(null)
+  const [width, setWidth] = useState(640)
+  const [active, setActive] = useState(null) // index of the day under the crosshair
+
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(280, entry.contentRect.width)))
+    observer.observe(box.current)
+    return () => observer.disconnect()
+  }, [])
+
+  const flagByDate = Object.fromEntries(flags.map((f) => [f.session_date, f]))
+  const closes = prices.map((p) => p.close)
+  const yTicks = niceTicks(Math.min(...closes), Math.max(...closes))
+  const [yMin, yMax] = [yTicks[0], yTicks.at(-1)]
+  const plotWidth = width - PAD.left - PAD.right
+  const step = prices.length > 1 ? plotWidth / (prices.length - 1) : 0
+  const x = (i) => PAD.left + (prices.length > 1 ? i * step : plotWidth / 2)
+  const y = (v) => PAD.top + PLOT_HEIGHT - ((v - yMin) / (yMax - yMin || 1)) * PLOT_HEIGHT
+  const line = prices.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.close).toFixed(1)}`).join('')
+
+  // x-axis: month starts for longer ranges, every 5 trading days for one month; never crowded
+  const xTicks = []
+  prices.forEach((p, i) => {
+    const isTick = prices.length > 30 ? i === 0 || p.date.slice(0, 7) !== prices[i - 1].date.slice(0, 7) : i % 5 === 0
+    if (isTick && (!xTicks.length || x(i) - x(xTicks.at(-1)) >= MIN_TICK_GAP)) xTicks.push(i)
+  })
+
+  const indexAt = (clientX) => {
+    const left = box.current.getBoundingClientRect().left
+    return Math.max(0, Math.min(prices.length - 1, Math.round((clientX - left - PAD.left) / (step || 1))))
+  }
+  const openActive = () => {
+    if (active != null && flagByDate[prices[active].date]) onOpenDay(prices[active].date)
+  }
+  const onKeyDown = (e) => {
+    const moves = { ArrowLeft: -1, ArrowRight: 1, PageUp: -5, PageDown: 5 }
+    if (e.key in moves) setActive((i) => Math.max(0, Math.min(prices.length - 1, (i ?? prices.length - 1) + moves[e.key])))
+    else if (e.key === 'Home') setActive(0)
+    else if (e.key === 'End') setActive(prices.length - 1)
+    else if (e.key === 'Enter') openActive()
+    else return
+    e.preventDefault()
+  }
+
+  const last = prices.at(-1)
+  const day = active != null ? prices[active] : null
+  const flag = day && flagByDate[day.date]
+  const tipOnLeft = day && x(active) > width / 2
+
+  return (
+    <div
+      className="price-chart"
+      ref={box}
+      tabIndex={0}
+      role="group"
+      aria-label={`${ticker} daily closing price, ${formatDate(prices[0].date)} to ${formatDate(last.date)}. Use the arrow keys to move through days.`}
+      onKeyDown={onKeyDown}
+      onFocus={() => setActive((i) => i ?? prices.length - 1)}
+      onBlur={() => setActive(null)}
+    >
+      <svg width={width} height={PAD.top + PLOT_HEIGHT + PAD.bottom} aria-hidden="true">
+        {yTicks.map((v) => (
+          <g key={v}>
+            <line className="grid" x1={PAD.left} x2={width - PAD.right} y1={y(v)} y2={y(v)} />
+            <text className="axis-label" x={PAD.left - 8} y={y(v) + 4} textAnchor="end">{number(v, v < 10 ? 2 : 0)}</text>
+          </g>
+        ))}
+        {xTicks.map((i) => (
+          <text key={i} className="axis-label" x={x(i)} y={PAD.top + PLOT_HEIGHT + 20} textAnchor="middle">
+            {prices.length > 30 ? formatMonthShort(prices[i].date) : formatShortDate(prices[i].date)}
+          </text>
+        ))}
+
+        <path className="price-line" d={line} />
+
+        {day && <line className="crosshair" x1={x(active)} x2={x(active)} y1={PAD.top} y2={PAD.top + PLOT_HEIGHT} />}
+
+        {prices.map((p, i) => {
+          const f = flagByDate[p.date]
+          if (!f) return null
+          const [cx, cy] = [x(i), y(p.close)]
+          const up = (f.return_1d_pct ?? 0) >= 0
+          const shape = up ? `M${cx},${cy - 7}L${cx - 6},${cy + 5}L${cx + 6},${cy + 5}Z` : `M${cx},${cy + 7}L${cx - 6},${cy - 5}L${cx + 6},${cy - 5}Z`
+          return <path key={p.date} className={`flag-marker ${up ? 'up' : 'down'}`} d={shape} />
+        })}
+
+        {/* A flagged day's marker doubles as its dot, so it's never hidden under one */}
+        {!flagByDate[last.date] && <circle className="end-dot" cx={x(prices.length - 1)} cy={y(last.close)} r={4} />}
+        <text className="end-label" x={x(prices.length - 1) + 10} y={y(last.close) + 4}>{number(last.close, 2)}</text>
+        {day && !flag && <circle className="hover-dot" cx={x(active)} cy={y(day.close)} r={4} />}
+
+        {/* Hit area: the whole plot, so the pointer only has to be near a day */}
+        <rect
+          className={`hit-area ${flag ? 'clickable' : ''}`}
+          x={PAD.left - step / 2}
+          y={PAD.top}
+          width={plotWidth + step}
+          height={PLOT_HEIGHT}
+          onPointerMove={(e) => setActive(indexAt(e.clientX))}
+          onPointerLeave={() => setActive(null)}
+          onClick={openActive}
+        />
+      </svg>
+
+      {day && (
+        <div
+          className="chart-tooltip"
+          style={{ left: x(active) + (tipOnLeft ? -12 : 12), transform: tipOnLeft ? 'translateX(-100%)' : 'none' }}
+          aria-live="polite"
+        >
+          <strong>{number(day.close, 2)}</strong>
+          <span className="muted">{formatDate(day.date)}</span>
+          {day.change_pct != null && <span>{percent(day.change_pct)} on the day</span>}
+          {flag && (
+            <span className="tip-flag">
+              <span>{flag.return_1d_pct >= 0 ? '▲' : '▼'} Flagged in report</span>
+              <span className="muted">
+                z-score {number(flag.return_zscore, 1)}
+                {flag.volume_vs_avg != null && ` · volume ${flag.volume_vs_avg}×`}
+              </span>
+              <span className="muted small">Click (or press Enter) to open it</span>
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 ```

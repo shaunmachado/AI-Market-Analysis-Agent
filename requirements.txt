@@ -5,3 +5,4 @@ pandas
 starlette>=1.0
 uvicorn
 python-dotenv
+voyageai

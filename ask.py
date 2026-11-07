@@ -1,31 +1,37 @@
-"""Answer questions about saved reports with Claude.
+"""Answer questions about saved reports with Claude, using retrieval (RAG).
 
-No RAG yet: it picks the relevant reports straight from the database (the 10
-most recent, plus the figures and flagged-day reports for any ticker named in
-the question) and asks Claude to answer from those alone, citing report dates.
+For each question it gathers, within a size limit:
+1. Figures across days for any watchlist ticker named in the question.
+2. The passages from any report that best match the question, found by
+   search_index.py (keywords plus meaning), so older reports are reachable.
+3. The 10 most recent reports in full, plus recent reports where a named ticker was flagged.
+Claude is told to answer from that material alone and to cite report dates.
 """
 
+import asyncio
 import re
 from contextlib import closing
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, StreamEvent, query
 
 import reports_db
+import search_index
 from run_brief import AGENT_ENV  # same auth as the report runs: the project's API key, if set
 
 SYSTEM_PROMPT = """You answer questions about the user's saved stock watchlist reports.
 
 Rules:
-- Use only the reports and figures provided. If they don't contain the answer, say so plainly.
-- Cite the report date for every claim, like (2026-11-05).
+- Use only the reports, passages and figures provided. If they don't contain the answer, say so plainly.
+- Cite the report date for every claim, like (2026-11-05). Passages carry the date of the report they came from.
 - Every number must come from the provided material. Never estimate or calculate new figures.
 - Intraday reports describe moves "so far" that day, and those figures may have changed since.
 - This is research, not investment advice. Never recommend buying or selling.
 - Keep answers short: a few sentences or a short list, in markdown."""
 
 MAX_QUESTION_CHARS = 500
-RECENT_REPORTS = 10              # always included
-FLAGGED_REPORTS_PER_TICKER = 10  # extra reports for each ticker named in the question
+RECENT_REPORTS = 10              # always included in full
+FLAGGED_REPORTS_PER_TICKER = 10  # recent reports for each ticker named in the question
+PASSAGES = 8                     # best-matching passages from any report (the retrieval step)
 MAX_CONTEXT_CHARS = 60_000       # keeps each question's cost predictable
 
 options = ClaudeAgentOptions(
@@ -47,35 +53,61 @@ def mentioned_tickers(conn, question: str) -> list[str]:
     return sorted(words & known)
 
 
+def find_passages(question: str) -> list[dict]:
+    """The retrieval step. If the index isn't available, Ask still works from recent reports."""
+    try:
+        search_index.sync(embed_now=False)  # make sure the newest reports are searchable
+        return search_index.search(question, limit=PASSAGES)["results"]
+    except Exception:
+        return []
+
+
 def build_context(conn, question: str) -> tuple[str, list[str]]:
-    """The material Claude answers from, and the report dates it includes."""
+    """The material Claude answers from, and the report dates it draws on."""
     days = [r["session_date"] for r in reports_db.list_reports(conn, limit=RECENT_REPORTS)]
     tickers = mentioned_tickers(conn, question)
     for ticker in tickers:
         days += [row[0] for row in conn.execute(
             """SELECT session_date FROM report_tickers WHERE ticker = ? AND category = 'flagged'
                ORDER BY session_date DESC LIMIT ?""", (ticker, FLAGGED_REPORTS_PER_TICKER))]
+    days = sorted(set(days), reverse=True)
 
-    parts, size = [], 0
+    parts, used, size = [], set(), 0
+
+    def add(text: str, day: str | None = None) -> bool:
+        nonlocal size
+        if size + len(text) > MAX_CONTEXT_CHARS:
+            return False
+        parts.append(text)
+        size += len(text)
+        if day:
+            used.add(day)
+        return True
+
     for ticker in tickers:
         lines = [f"## Figures for {ticker} (newest first)",
                  "date | status | category | return % | z-score | volume vs normal"]
         lines += [f"{h['session_date']} | {h['status']} | {h['category']} | {h['return_1d_pct']} | "
                   f"{h['return_zscore']} | {h['volume_vs_avg']}"
                   for h in reports_db.ticker_history(conn, ticker, limit=60)]
-        parts.append("\n".join(lines))
-        size += len(parts[-1])
+        add("\n".join(lines))
 
-    used = []
-    for day in sorted(set(days), reverse=True):
+    # Retrieved passages from reports that aren't already included in full
+    for p in find_passages(question):
+        if p["session_date"] not in days:
+            add(f"## Passage from the report of {p['session_date']} ({p['status']}): {p['heading']}\n\n{p['text']}",
+                p["session_date"])
+
+    for day in days:
         report = reports_db.get_report(conn, day)
-        block = f"## Report {day} ({report['status']}, as of {report['as_of']})\n\n{report['body_md']}"
-        if size + len(block) > MAX_CONTEXT_CHARS:
+        if not add(f"## Report {day} ({report['status']}, as of {report['as_of']})\n\n{report['body_md']}", day):
             break
-        parts.append(block)
-        used.append(day)
-        size += len(block)
-    return "\n\n---\n\n".join(parts), used
+    return "\n\n---\n\n".join(parts), sorted(used, reverse=True)
+
+
+def gather(question: str) -> tuple[str, list[str]]:
+    with closing(reports_db.connect(readonly=True)) as conn:
+        return build_context(conn, question)
 
 
 async def answer(question: str, emit) -> dict:
@@ -84,8 +116,7 @@ async def answer(question: str, emit) -> dict:
     question = question.strip()
     if not question or len(question) > MAX_QUESTION_CHARS:
         raise ValueError(f"questions must be 1 to {MAX_QUESTION_CHARS} characters")
-    with closing(reports_db.connect(readonly=True)) as conn:
-        context, used = build_context(conn, question)
+    context, used = await asyncio.to_thread(gather, question)  # searching can take a moment
     if not used:
         event = {"type": "done", "answer": "There are no saved reports yet, so there's nothing to answer from.",
                  "reports_used": [], "cost_usd": 0}

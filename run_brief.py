@@ -46,6 +46,7 @@ from claude_agent_sdk import (  # noqa: E402
 )
 
 import reports_db  # noqa: E402
+import search_index  # noqa: E402
 from market_tools import flag_events, market_session, now_et  # noqa: E402
 
 HERE = Path(__file__).parent
@@ -164,6 +165,13 @@ async def run_once(emit=None) -> dict:
     event = {"type": "saved", "outcome": outcome, "session_date": session_date, "status": status,
              "turns": result.num_turns, "cost_usd": round(cost, 4)}
     emit(event)
+
+    # Keep the search index current. The report is already saved, so a problem here isn't fatal:
+    # the index catches up next time (or run `python search_index.py sync`).
+    try:
+        await asyncio.to_thread(search_index.sync)
+    except Exception as e:
+        emit({"type": "warning", "message": f"Saved, but the search index wasn't updated ({e}). It will catch up later."})
     return event
 
 

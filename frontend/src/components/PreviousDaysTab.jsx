@@ -3,6 +3,7 @@ import { getReport, listReports } from '../api'
 import { formatDate, formatMonth } from '../format'
 import { routes } from '../useRoute'
 import ReportView from './ReportView'
+import SearchPanel from './SearchPanel'
 import StatusBadge from './StatusBadge'
 
 const PAGE_SIZE = 30
@@ -67,51 +68,54 @@ export default function PreviousDaysTab({ latestDate, lastSaved, selectedDate })
   }
 
   return (
-    <section className="panel" aria-label="All previous days">
-      <div className="section-head">
-        <h2>All previous days</h2>
-        <span className="muted small">
-          {days.length}
-          {hasMore ? '+' : ''} day{days.length === 1 ? '' : 's'}
-        </span>
-      </div>
-      {error && <p className="error">{error}</p>}
-
-      {days.length === 0 && !selectedDate ? (
-        <p className="muted">No earlier reports yet.</p>
-      ) : (
-        <div className="previous-grid">
-          <nav className="day-list" aria-label="Days">
-            {months.map((month) => (
-              <div key={month.label}>
-                <h3 className="month">{month.label}</h3>
-                <ul>
-                  {month.days.map((d) => (
-                    <li key={d.session_date}>
-                      <a
-                        className={`day ${d.session_date === shownDate ? 'active' : ''}`}
-                        href={routes.previous(d.session_date)}
-                        aria-current={d.session_date === shownDate ? 'true' : undefined}
-                      >
-                        <span className="day-date">{formatDate(d.session_date)}</span>
-                        <span className="day-meta">
-                          <StatusBadge status={d.status} /> {d.flagged_count} flagged
-                        </span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-            {hasMore && (
-              <button className="link" onClick={loadOlder}>Load older days</button>
-            )}
-          </nav>
-          <div className="day-report" ref={reportRef}>
-            {report ? <ReportView report={report} /> : <p className="muted">Loading…</p>}
-          </div>
+    <>
+      <SearchPanel latestDate={latestDate} />
+      <section className="panel" aria-label="All previous days">
+        <div className="section-head">
+          <h2>All previous days</h2>
+          <span className="muted small">
+            {days.length}
+            {hasMore ? '+' : ''} day{days.length === 1 ? '' : 's'}
+          </span>
         </div>
-      )}
-    </section>
+        {error && <p className="error">{error}</p>}
+
+        {days.length === 0 && !selectedDate ? (
+          <p className="muted">No earlier reports yet.</p>
+        ) : (
+          <div className="previous-grid">
+            <nav className="day-list" aria-label="Days">
+              {months.map((month) => (
+                <div key={month.label}>
+                  <h3 className="month">{month.label}</h3>
+                  <ul>
+                    {month.days.map((d) => (
+                      <li key={d.session_date}>
+                        <a
+                          className={`day ${d.session_date === shownDate ? 'active' : ''}`}
+                          href={routes.previous(d.session_date)}
+                          aria-current={d.session_date === shownDate ? 'true' : undefined}
+                        >
+                          <span className="day-date">{formatDate(d.session_date)}</span>
+                          <span className="day-meta">
+                            <StatusBadge status={d.status} /> {d.flagged_count} flagged
+                          </span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              {hasMore && (
+                <button className="link" onClick={loadOlder}>Load older days</button>
+              )}
+            </nav>
+            <div className="day-report" id="day-report" ref={reportRef}>
+              {report ? <ReportView report={report} /> : <p className="muted">Loading…</p>}
+            </div>
+          </div>
+        )}
+      </section>
+    </>
   )
 }

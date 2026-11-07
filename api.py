@@ -9,6 +9,9 @@ Endpoints:
     GET  /api/reports/latest
     GET  /api/reports/{YYYY-MM-DD}
     GET  /api/tickers/{TICKER}/history?limit=30
+    GET  /api/tickers/{TICKER}/prices?range=1mo|3mo|6mo|1y   daily prices for charts
+    GET  /api/search?q=...&limit=12&ticker=&since=&until=     search passages in all reports
+    GET  /api/search/status     what the search index contains
     GET  /api/events            live updates (Server-Sent Events)
     GET  /api/runs/current      the on-demand run in progress, or the last one
     POST /api/runs              write a fresh report now
@@ -23,9 +26,10 @@ import asyncio
 import json
 import os
 import re
+import threading
 import time
 from contextlib import asynccontextmanager, closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -36,15 +40,22 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 import ask
+import prices
 import reports_db
 import run_brief
+import search_index
 
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 TICKER = re.compile(r"[A-Za-z0-9.\-^=]{1,15}")
 FRONTEND_ORIGINS = [o.strip() for o in os.environ.get(
     "FRONTEND_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",") if o.strip()]
-RUN_COOLDOWN_SECONDS = int(os.environ.get("RUN_COOLDOWN_SECONDS", "300"))  # between on-demand runs
+RUN_COOLDOWN_SECONDS = int(os.environ.get("RUN_COOLDOWN_SECONDS", "60"))  # between on-demand runs
 POLL_SECONDS = float(os.environ.get("REPORT_POLL_SECONDS", "2"))          # how often to check for new reports
+AUTO_CLOSE = os.environ.get("AUTO_CLOSE_RUN", "1") != "0"                 # write the final report after the close
+AUTO_CLOSE_TIME = os.environ.get("AUTO_CLOSE_TIME", "16:15")              # Eastern time, 15 minutes after the bell
+AUTO_CLOSE_CHECK_SECONDS = float(os.environ.get("AUTO_CLOSE_CHECK_SECONDS", "30"))
+AUTO_CLOSE_RETRY_SECONDS = 15 * 60
+AUTO_CLOSE_MAX_ATTEMPTS = 3
 MAX_ACTIVE_QUESTIONS = 2
 FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 
@@ -125,6 +136,72 @@ def ticker_history(request):
     return JSONResponse({"ticker": ticker.upper(), "history": history})
 
 
+def ticker_prices(request):
+    """Daily closing prices for a chart. Runs in a worker thread, so a slow download
+    doesn't hold up anything else."""
+    ticker = request.path_params["ticker"]
+    period = request.query_params.get("range", "3mo")
+    if not TICKER.fullmatch(ticker):
+        return _error(400, "invalid ticker")
+    if period not in prices.RANGES:
+        return _error(400, f"range must be one of: {', '.join(prices.RANGES)}")
+    try:
+        rows = prices.get_prices(ticker.upper(), period)
+    except Exception as e:  # network problem, rate limit, unknown ticker...
+        return _error(502, f"couldn't load prices for {ticker.upper()} ({e})")
+    if not rows:
+        return _error(404, f"no price data for {ticker.upper()}")
+    return JSONResponse({"ticker": ticker.upper(), "range": period, "prices": rows})
+
+
+# ---------------------------------------------------------------------------
+# Search (the retrieval part of RAG). The index lives in search.db, never in reports.db.
+# ---------------------------------------------------------------------------
+
+_index_lock = threading.Lock()  # one background embedding job at a time
+_background = set()  # keeps background tasks alive until they finish
+
+
+def _update_index_quietly() -> None:
+    """Index and embed new reports. Problems are logged, never fatal."""
+    with _index_lock:
+        try:
+            search_index.sync()
+        except Exception as e:
+            log.warning("Search index update failed (it will retry on the next report): %s", e)
+
+
+def update_index_in_background() -> None:
+    task = asyncio.create_task(asyncio.to_thread(_update_index_quietly))
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
+def search_reports(request):
+    q = request.query_params.get("q", "").strip()
+    ticker = request.query_params.get("ticker")
+    since, until = request.query_params.get("since"), request.query_params.get("until")
+    try:
+        limit = _limit(request, default=12, maximum=50)
+        if not q:
+            raise BadRequest("q is required")
+        if len(q) > ask.MAX_QUESTION_CHARS:
+            raise BadRequest(f"keep searches under {ask.MAX_QUESTION_CHARS} characters")
+        if ticker and not TICKER.fullmatch(ticker):
+            raise BadRequest("invalid ticker")
+        for name, value in (("since", since), ("until", until)):
+            if value and not DATE.fullmatch(value):
+                raise BadRequest(f"{name} must be a date like 2026-11-06")
+    except BadRequest as e:
+        return _error(400, str(e))
+    search_index.sync(embed_now=False)  # the newest reports are searchable by keyword straight away
+    return JSONResponse(search_index.search(q, limit, ticker, since, until))
+
+
+def search_status(request):
+    return JSONResponse(search_index.status())
+
+
 # ---------------------------------------------------------------------------
 # Live updates
 # ---------------------------------------------------------------------------
@@ -174,6 +251,7 @@ async def watch_reports() -> None:
         if current and current != last:
             last = current
             hub.publish({"type": "report_saved", **current})
+            update_index_in_background()  # covers scheduled runs, which are separate programs
 
 
 async def events(request):
@@ -231,10 +309,10 @@ class RunManager:
     def snapshot(self) -> dict:
         return {**self.state, "log": list(self.state["log"])}
 
-    def start(self) -> dict:
+    def start(self, scheduled: bool = False) -> dict:
         if self.task and not self.task.done():
             raise AlreadyRunning("A report is already being written. Its progress is shown below.")
-        if self.last_started is not None:
+        if self.last_started is not None and not scheduled:  # the after-close run ignores the button's cooldown
             wait = RUN_COOLDOWN_SECONDS - (time.monotonic() - self.last_started)
             if wait > 0:
                 seconds = int(wait) + 1
@@ -326,14 +404,64 @@ async def ask_question(request):
 
 
 # ---------------------------------------------------------------------------
+# Automatic run after the close
+# ---------------------------------------------------------------------------
+
+def close_run_due(now: datetime, state: dict) -> bool:
+    """True when today's after-close run should be attempted now. state is the loop's memory for today."""
+    hour, minute = map(int, AUTO_CLOSE_TIME.split(":"))
+    if now.weekday() >= 5 or state["done"] or state["attempts"] >= AUTO_CLOSE_MAX_ATTEMPTS:
+        return False  # weekends have no session; run_once skips holidays for free
+    if (now.hour, now.minute) < (hour, minute):
+        return False
+    return state["next_try"] is None or now >= state["next_try"]
+
+
+async def run_close_job() -> None:
+    """The default after-close job: the same run as the "Run update now" button.
+    Once the market is closed it writes the day's final report, or skips for free if it's already saved."""
+    while runs.task and not runs.task.done():  # let a run that's already going finish first
+        await asyncio.wait([runs.task])
+    runs.start(scheduled=True)
+    await asyncio.wait([runs.task])
+    if runs.state["state"] == "failed":
+        raise RuntimeError(runs.state["error"])
+
+
+close_job = run_close_job  # the test environment swaps this for a simulated one
+
+
+async def run_at_close() -> None:
+    """Once a weekday after AUTO_CLOSE_TIME (Eastern), saves the final report. Retries a failed run twice."""
+    state = {"day": None, "attempts": 0, "done": False, "next_try": None}
+    while True:
+        await asyncio.sleep(AUTO_CLOSE_CHECK_SECONDS)
+        now = run_brief.now_et()
+        if state["day"] != now.date():
+            state = {"day": now.date(), "attempts": 0, "done": False, "next_try": None}
+        if not close_run_due(now, state):
+            continue
+        state["attempts"] += 1
+        try:
+            await close_job()
+            state["done"] = True
+        except Exception:
+            state["next_try"] = now + timedelta(seconds=AUTO_CLOSE_RETRY_SECONDS)
+
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app):
-    watcher = asyncio.create_task(watch_reports())
+    tasks = [asyncio.create_task(watch_reports())]
+    update_index_in_background()  # catch up on anything saved while the API was off
+    if AUTO_CLOSE:
+        tasks.append(asyncio.create_task(run_at_close()))
     yield
-    watcher.cancel()
+    for task in tasks:
+        task.cancel()
 
 
 def create_app(frontend_dist: Path = FRONTEND_DIST) -> Starlette:
@@ -343,6 +471,9 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> Starlette:
         Route("/api/reports/latest", latest_report),  # must come before the {session_date} route
         Route("/api/reports/{session_date}", get_report),
         Route("/api/tickers/{ticker}/history", ticker_history),
+        Route("/api/tickers/{ticker}/prices", ticker_prices),
+        Route("/api/search", search_reports),
+        Route("/api/search/status", search_status),
         Route("/api/events", events),
         Route("/api/runs", start_run, methods=["POST"]),
         Route("/api/runs/current", current_run),

@@ -13,6 +13,10 @@
   --final: #1f6f43;
   --final-bg: #dcfce7;
   --flagged-bg: #fff7ed;
+  --series-1: #2a78d6;   /* chart line (validated palette, light) */
+  --grid: #e6e9ee;
+  --mark-up: #12805c;    /* flagged-day markers; shape (▲▼) carries direction too */
+  --mark-down: #c0392b;
   --radius: 10px;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color: var(--text);
@@ -36,6 +40,10 @@
     --final: #4ade80;
     --final-bg: #0d2e1b;
     --flagged-bg: #2a1d0f;
+    --series-1: #3987e5;  /* stepped for the dark surface, validated separately */
+    --grid: #252d37;
+    --mark-up: #1f9d63;
+    --mark-down: #e66767;
   }
 }
 
@@ -148,3 +156,86 @@ textarea {
 .day.active { border-color: var(--accent); background: var(--bg); }
 .day-date { font-weight: 600; }
 .day-meta { font-size: 0.8rem; color: var(--muted); }
+
+/* Ticker rows open a chart */
+.tickers tr.clickable { cursor: pointer; }
+.tickers tr.clickable:hover td { background: var(--bg); }
+.ticker-button {
+  all: unset; cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px;
+}
+.ticker-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chart-icon { color: var(--muted); }
+
+/* Chart dialog */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 16px;
+  background: rgb(0 0 0 / 0.45);
+}
+.modal {
+  width: min(880px, 100%); max-height: calc(100vh - 32px); overflow: auto; padding: 20px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgb(0 0 0 / 0.25);
+}
+.modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.modal-head h2 { margin: 0; font-size: 1.4rem; }
+.close {
+  width: 36px; height: 36px; font-size: 1.3rem; line-height: 1; color: var(--text);
+  background: transparent; border: 1px solid var(--border); border-radius: 8px;
+}
+.range-row { display: flex; gap: 4px; margin: 12px 0; }
+.range {
+  padding: 4px 12px; font-size: 0.85rem; font-weight: 600; color: var(--text);
+  background: transparent; border: 1px solid var(--border); border-radius: 8px;
+}
+.range.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.chart-stats { display: flex; gap: 32px; flex-wrap: wrap; margin-bottom: 8px; }
+.chart-stats div { display: grid; }
+.chart-stats strong { font-size: 1.25rem; }
+.refreshing { opacity: 0.5; transition: opacity 0.2s; } /* keeps the old chart while a new range loads */
+.table-title { font-size: 0.9rem; margin: 16px 0 6px; }
+@media (max-width: 760px) {
+  .modal { padding: 14px; }
+  .chart-stats { gap: 16px; }
+}
+
+/* The price chart */
+.price-chart { position: relative; outline: none; border-radius: 8px; }
+.price-chart:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.price-chart svg { display: block; }
+.grid { stroke: var(--grid); stroke-width: 1; }
+.axis-label { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.price-line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.crosshair { stroke: var(--muted); stroke-width: 1; }
+/* Dots and markers get a 2px ring in the surface color, so they stay clear where they cross the line */
+.end-dot, .hover-dot, .flag-marker { stroke: var(--panel); stroke-width: 4; paint-order: stroke; }
+.end-dot, .hover-dot { fill: var(--series-1); }
+.flag-marker.up { fill: var(--mark-up); }
+.flag-marker.down { fill: var(--mark-down); }
+.end-label { fill: var(--text); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.hit-area { fill: transparent; }
+.hit-area.clickable { cursor: pointer; }
+.chart-tooltip {
+  position: absolute; top: 8px; pointer-events: none; display: grid; gap: 2px; min-width: 150px; max-width: 240px;
+  padding: 8px 10px; font-size: 0.85rem; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.12);
+}
+.chart-tooltip strong { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.tip-flag { display: grid; gap: 2px; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
+
+/* Search (Previous days tab) */
+.panel.search { margin-bottom: 16px; }
+.search-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.search-row input {
+  flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+}
+.search-results { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 14px; }
+.result-day { display: inline-flex; align-items: center; gap: 8px; color: var(--text); text-decoration: none; }
+.result-day:hover .day-date { text-decoration: underline; }
+.passage { margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--border); }
+.passage-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.passage-text {
+  margin: 2px 0 0; font-size: 0.9rem; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+mark { background: var(--live-bg); color: inherit; border-radius: 2px; padding: 0 1px; }

@@ -68,6 +68,7 @@ options = ClaudeAgentOptions(
         "mcp__market__market_backdrop",
         "mcp__market__compute_moves",
         "mcp__market__get_news",
+        "mcp__market__upcoming_events",
     ],
     max_turns=25,
     max_budget_usd=1.00,     # hard stop on cost per run

@@ -5,6 +5,7 @@ report with the alerts already sent and posts whatever is new:
 - While the market is open: one message for tickers flagged for the first time today.
   A ticker alerts once per day, unless its move later grows a lot (or reverses).
 - After the final report: one end-of-day summary per day.
+Both include what's coming up, from the events calendar (events.py).
 Every alert is logged in the reports database. One that fails is retried by the next run.
 
 Set it up:
@@ -28,10 +29,11 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
+import events
 import reports_db
 
 load_dotenv()  # picks up DISCORD_WEBHOOK_URL from .env
@@ -41,6 +43,9 @@ APP_URL = os.environ.get("ALERTS_APP_URL", "").rstrip("/")  # e.g. http://localh
 SEND_FLAG_ALERTS = True      # newly flagged tickers while the market is open
 SEND_DAILY_SUMMARY = True    # one summary after each final report
 ESCALATE_Z = 1.5             # alert a ticker again the same day if its |z-score| grows by this much
+COMING_UP_DAYS = 7           # the daily summary lists calendar events this many days ahead
+NEXT_EVENT_DAYS = 14         # a flag card mentions the ticker's next event if it's this soon
+MAX_COMING_UP = 6            # most "Coming up" lines in a summary
 PENDING_SECONDS = 120        # an alert being sent by another run counts as sent for this long
 USERNAME = "Market Analyst"
 COLORS = {"up": 0x12805C, "down": 0xC0392B, "neutral": 0x5F6B7A}
@@ -182,7 +187,7 @@ def _app_link(path: str) -> dict:
     return {"url": f"{APP_URL}/{path}"} if APP_URL.startswith(("http://", "https://")) else {}
 
 
-def flag_embed(t: dict, report: dict, previous: dict | None = None) -> dict:
+def flag_embed(t: dict, report: dict, previous: dict | None = None, next_event: dict | None = None) -> dict:
     intraday = report["status"] == "intraday"
     so_far = " so far today" if intraday else ""
     pct = t["return_1d_pct"] or 0
@@ -199,6 +204,8 @@ def flag_embed(t: dict, report: dict, previous: dict | None = None) -> dict:
     why = likely_why(report["body_md"], t["ticker"])
     if why:
         lines.append(f"**Likely why:** {_shorten(why, 600)}")
+    if next_event:
+        lines.append(f"**Coming up:** {events.event_line(next_event, company=False)}")
     return {
         "title": _shorten(title, MAX_TITLE),
         "description": _shorten("\n".join(lines), MAX_DESCRIPTION),
@@ -208,7 +215,7 @@ def flag_embed(t: dict, report: dict, previous: dict | None = None) -> dict:
     }
 
 
-def flags_payload(report: dict, items: list[tuple[dict, dict | None]]) -> dict:
+def flags_payload(report: dict, items: list[tuple[dict, dict | None]], upcoming: list[dict] = ()) -> dict:
     new = sum(1 for _, previous in items if previous is None)
     bigger = len(items) - new
     parts = [f"{new} new flag{'s' if new != 1 else ''}"] if new else []
@@ -217,10 +224,14 @@ def flags_payload(report: dict, items: list[tuple[dict, dict | None]]) -> dict:
     content = f"**{' and '.join(parts).capitalize()}** in the intraday update as of {report['as_of'][11:]}"
     if len(items) > MAX_EMBEDS:
         content += f" (showing {MAX_EMBEDS}; the rest are in the app)"
-    return {"content": content, "embeds": _fit([flag_embed(t, report, prev) for t, prev in items[:MAX_EMBEDS]])}
+    next_event = {}  # each ticker's soonest event (upcoming is in date order)
+    for e in upcoming:
+        next_event.setdefault(e["ticker"], e)
+    return {"content": content, "embeds": _fit([flag_embed(t, report, prev, next_event.get(t["ticker"]))
+                                                for t, prev in items[:MAX_EMBEDS]])}
 
 
-def summary_payload(report: dict) -> dict:
+def summary_payload(report: dict, upcoming: list[dict] = ()) -> dict:
     tickers = report["tickers"]
     flagged = [t for t in tickers if t["category"] == "flagged"]
     lines = []
@@ -241,6 +252,12 @@ def summary_payload(report: dict) -> dict:
     errors = [t["ticker"] for t in tickers if t["category"] == "error"]
     if errors:
         lines.append(f"**Data issues:** {', '.join(errors)}")
+    last_day = (date.fromisoformat(report["session_date"]) + timedelta(days=COMING_UP_DAYS)).isoformat()
+    soon = [e for e in upcoming if report["session_date"] < e["event_date"] <= last_day]
+    if soon:
+        lines += ["", "**Coming up:**"] + [f"• {events.event_line(e)}" for e in soon[:MAX_COMING_UP]]
+        if len(soon) > MAX_COMING_UP:
+            lines.append(f"…and {len(soon) - MAX_COMING_UP} more on the calendar")
     embed = {
         "title": _shorten(report["title"], MAX_TITLE),
         "description": _shorten("\n".join(lines), MAX_DESCRIPTION),
@@ -285,6 +302,12 @@ def _grew(t: dict, previous: dict) -> bool:
     if now * then < 0:  # reversed direction
         return abs(now) >= 2
     return abs(now) >= abs(then) + ESCALATE_Z
+
+
+def calendar_for(conn, report: dict) -> list[dict]:
+    """Events from the report's day through the next couple of weeks (empty before the calendar exists)."""
+    start = date.fromisoformat(report["session_date"])
+    return events.upcoming(conn, start, max(COMING_UP_DAYS, NEXT_EVENT_DAYS), events.watchlist_tickers())
 
 
 def plan(conn, session_date: str) -> dict:
@@ -339,10 +362,10 @@ def notify(session_date: str, force_summary: bool = False) -> dict:
             if todo["flags"]:
                 ids = [_record(conn, session_date, "flag", report, t) for t, _ in todo["flags"]]
                 label = "flag alert: " + ", ".join(t["ticker"] for t, _ in todo["flags"])
-                messages.append((label, ids, flags_payload(report, todo["flags"])))
+                messages.append((label, ids, flags_payload(report, todo["flags"], calendar_for(conn, report))))
             if todo["summary"]:
                 messages.append((f"daily summary for {session_date}", [_record(conn, session_date, "summary", report)],
-                                 summary_payload(report)))
+                                 summary_payload(report, calendar_for(conn, report))))
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")
@@ -400,13 +423,14 @@ def main() -> None:
                     sys.exit("No reports yet.")
                 day = row[0]
             todo = plan(conn, day)
+            upcoming = calendar_for(conn, todo["report"]) if todo["report"] else []
         if todo["report"] is None:
             sys.exit(f"No report for {day}.")
         payloads = []
         if todo["flags"]:
-            payloads.append(flags_payload(todo["report"], todo["flags"]))
+            payloads.append(flags_payload(todo["report"], todo["flags"], upcoming))
         if todo["summary"]:
-            payloads.append(summary_payload(todo["report"]))
+            payloads.append(summary_payload(todo["report"], upcoming))
         print(json.dumps(payloads, indent=2) if payloads else f"Nothing new to send for {day}.")
     elif args.command == "log":
         with closing(connect()) as conn:

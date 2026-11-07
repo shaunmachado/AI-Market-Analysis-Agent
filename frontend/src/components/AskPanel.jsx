@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { askQuestion } from '../api'
 import Markdown from './Markdown'
 
-const EXAMPLES = ['What moved the most this week?', 'Why was NVDA flagged?', 'Which tickers keep getting flagged?']
+const EXAMPLES = ['What moved the most this week?', 'Why was NVDA flagged?', "What's coming up next week?"]
 
 export default function AskPanel() {
   const [question, setQuestion] = useState('')
@@ -50,7 +50,7 @@ export default function AskPanel() {
           <button className="primary" disabled={busy || !question.trim()}>
             {busy ? 'Answering…' : 'Ask'}
           </button>
-          <span className="muted small">Answers come only from saved reports.</span>
+          <span className="muted small">Answers come only from saved reports and the calendar.</span>
         </div>
       </form>
       <div className="examples">

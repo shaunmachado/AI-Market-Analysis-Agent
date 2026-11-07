@@ -5,6 +5,9 @@ export const formatDate = (day) =>
     weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
   })
 
+export const formatWeekdayDate = (day) =>
+  new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+
 export const formatFullDate = (day) =>
   new Date(`${day}T12:00:00`).toLocaleDateString(undefined, {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',

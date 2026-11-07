@@ -29,7 +29,6 @@ import numpy as np
 from dotenv import load_dotenv
 
 import reports_db
-
 load_dotenv()  # so VOYAGE_API_KEY in .env is found when this file runs on its own
 
 EMBED_MODEL = os.environ.get("VOYAGE_MODEL", "voyage-4")  # or voyage-finance-2, voyage-4-large...
@@ -103,6 +102,10 @@ def embed(texts: list[str], input_type: str) -> list[list[float]]:
 # Building the index
 # ---------------------------------------------------------------------------
 
+SKIPPED_SECTIONS = ("Coming up",)  # forward-looking calendar lines: they'd make a search for "earnings"
+                                   # find the days *before* each earnings date (Ask gets the calendar itself)
+
+
 def chunk_report(report: dict) -> list[dict]:
     """Split a brief into passages: one per ticker section, plus an overview of the rest.
     Each passage starts with the report's title, so it carries its date wherever it goes."""
@@ -116,6 +119,8 @@ def chunk_report(report: dict) -> list[dict]:
         if not section.strip():
             continue
         first_line = section.strip().splitlines()[0]
+        if first_line.lstrip("#").strip() in SKIPPED_SECTIONS:
+            continue
         match = TICKER_HEADING.match(first_line)
         if match:
             ticker = match.group(1)

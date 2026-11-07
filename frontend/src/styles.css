@@ -291,3 +291,10 @@ mark { background: var(--live-bg); color: inherit; border-radius: 2px; padding: 
 .kind-news { color: var(--live); background: var(--live-bg); }
 .cal-sources { margin: 6px 0 0; padding-left: 18px; }
 .cal-sources li { margin: 3px 0; overflow-wrap: anywhere; }
+
+/* Coming up (Today tab) */
+.coming-up ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.coming-up li a { display: flex; gap: 10px; padding: 6px 8px; margin: 0 -8px; border-radius: 6px; color: var(--text); text-decoration: none; }
+.coming-up li a:hover { background: var(--bg); }
+.cu-date { flex: none; width: 6.5em; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.cu-what { min-width: 0; font-size: 0.9rem; }

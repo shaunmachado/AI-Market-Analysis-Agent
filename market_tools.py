@@ -9,6 +9,9 @@ Works at any time of day:
 - Market open: measures today's move *so far* against the same time of day in
   recent sessions, so a partial day is never treated as a full one.
 
+upcoming_events reads the events calendar (events.py) from the reports database, so
+briefs can say what's coming up.
+
 Every flagged move also comes with sector and market context: how the ticker did
 against its sector ETF and the S&P 500, and whether that gap was unusual. That
 tells the agent whether a move was about the company, its sector, or the market.
@@ -16,6 +19,7 @@ tells the agent whether a move was about the company, its sector, or the market.
 Test it on its own:  npx @modelcontextprotocol/inspector python market_tools.py
 """
 
+from contextlib import closing
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -23,6 +27,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 from mcp.server.mcpserver import MCPServer
+
+import reports_db
 
 WATCHLIST_FILE = Path(__file__).parent / "watchlist.txt"
 ET = ZoneInfo("America/New_York")
@@ -464,6 +470,31 @@ def get_news(ticker: str, limit: int = 5) -> list[dict]:
             "summary": (c.get("summary") or "")[:300],
         })
     return results
+
+
+@mcp.tool()
+def upcoming_events(ticker: str = "", days: int = 14) -> dict:
+    """What's coming up, from the events calendar: earnings dates, ex-dividend dates and dated
+    events found in the news, for the whole watchlist (or one ticker) over the next `days` days.
+    `this_week` has ready-made lines for the next 7 days, for the brief's "Coming up" section.
+    An event with `confirmed` false is an estimated date.
+    """
+    import events  # imported here, not at the top, because events.py imports this module
+    today = now_et().date()
+    days = max(1, min(int(days), 60))
+    tickers = [ticker.strip().upper()] if ticker.strip() else load_watchlist()
+    with closing(reports_db.connect(readonly=True)) as conn:
+        found = events.upcoming(conn, today, days, tickers)
+        scanned = events.last_scan(conn)
+    rows = [{"date": e["event_date"], "days_away": (date.fromisoformat(e["event_date"]) - today).days,
+             "ticker": e["ticker"], "company": e["company"], "kind": e["kind"], "title": e["title"],
+             "confirmed": events.confirmed(e), "line": events.event_line(e)} for e in found]
+    result = {"from": today.isoformat(), "to": (today + timedelta(days=days)).isoformat(),
+              "calendar_updated": scanned["finished_at"] if scanned else None,
+              "events": rows, "this_week": [r["line"] for r in rows if r["days_away"] <= 7]}
+    if not scanned:
+        result["note"] = "The events calendar hasn't been filled in yet, so upcoming events aren't known."
+    return result
 
 
 if __name__ == "__main__":

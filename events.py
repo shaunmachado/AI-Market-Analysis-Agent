@@ -507,6 +507,33 @@ def last_scan(conn) -> dict | None:
     return dict(row) if row else None
 
 
+def watchlist_tickers() -> list[str] | None:
+    """The watchlist, or None (meaning every ticker) if it can't be read."""
+    try:
+        return market_tools.load_watchlist()
+    except OSError:
+        return None
+
+
+def upcoming(conn, start: date, days: int, tickers=None) -> list[dict]:
+    """Events from start to `days` days later (both included), for some tickers or all of them.
+    Used by the brief's upcoming_events tool, the Discord alerts and Ask."""
+    found = events_between(conn, start.isoformat(), (start + timedelta(days=days)).isoformat())
+    return [e for e in found if tickers is None or e["ticker"] in tickers]
+
+
+def confirmed(event: dict) -> bool:
+    """False for an earnings date Yahoo only gives as an estimated window."""
+    return not (event.get("date_note") or "").startswith("Estimated")
+
+
+def event_line(event: dict, company: bool = True) -> str:
+    """One event as a short line: 'Mon Nov 9: Microsoft (MSFT): Court hearing in patent case'."""
+    d = date.fromisoformat(event["event_date"])
+    who = f"{event['company']} ({event['ticker']}): " if company else ""
+    return f"{d:%a} {_day(d)}: {who}{event['title']}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Upcoming events calendar.")
     commands = parser.add_subparsers(dest="command", required=True)

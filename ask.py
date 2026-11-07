@@ -2,18 +2,21 @@
 
 For each question it gathers, within a size limit:
 1. Figures across days for any watchlist ticker named in the question.
-2. The passages from any report that best match the question, found by
+2. The events calendar: everything in the next 30 days, plus the last 30 days for named tickers.
+3. The passages from any report that best match the question, found by
    search_index.py (keywords plus meaning), so older reports are reachable.
-3. The 10 most recent reports in full, plus recent reports where a named ticker was flagged.
+4. The 10 most recent reports in full, plus recent reports where a named ticker was flagged.
 Claude is told to answer from that material alone and to cite report dates.
 """
 
 import asyncio
 import re
 from contextlib import closing
+from datetime import timedelta
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, StreamEvent, query
 
+import events
 import reports_db
 import search_index
 from run_brief import AGENT_ENV  # same auth as the report runs: the project's API key, if set
@@ -25,6 +28,7 @@ Rules:
 - Cite the report date for every claim, like (2026-11-05). Passages carry the date of the report they came from.
 - Every number must come from the provided material. Never estimate or calculate new figures.
 - Intraday reports describe moves "so far" that day, and those figures may have changed since.
+- Dated events come from the events calendar: cite them as (calendar), and say so when a date isn't confirmed.
 - This is research, not investment advice. Never recommend buying or selling.
 - Keep answers short: a few sentences or a short list, in markdown."""
 
@@ -32,6 +36,7 @@ MAX_QUESTION_CHARS = 500
 RECENT_REPORTS = 10              # always included in full
 FLAGGED_REPORTS_PER_TICKER = 10  # recent reports for each ticker named in the question
 PASSAGES = 8                     # best-matching passages from any report (the retrieval step)
+CALENDAR_DAYS = 30               # events calendar: this far ahead (all tickers) and back (named tickers)
 MAX_CONTEXT_CHARS = 60_000       # keeps each question's cost predictable
 
 options = ClaudeAgentOptions(
@@ -60,6 +65,21 @@ def find_passages(question: str) -> list[dict]:
         return search_index.search(question, limit=PASSAGES)["results"]
     except Exception:
         return []
+
+
+def calendar_section(conn, tickers: list[str]) -> str:
+    """Upcoming events for the watchlist, and recent ones for the tickers asked about."""
+    today = events.today_et()
+    soon = events.upcoming(conn, today, CALENDAR_DAYS, events.watchlist_tickers())
+    recent = events.upcoming(conn, today - timedelta(days=CALENDAR_DAYS), CALENDAR_DAYS - 1, tickers) if tickers else []
+    if not soon and not recent:
+        return ""
+    lines = [f"## Events calendar (today is {today:%a} {today.isoformat()})", "", "Coming up:"]
+    lines += [f"- {e['event_date']} {events.event_line(e)}" for e in soon] or ["- nothing in the next 30 days"]
+    if recent:
+        lines += ["", f"In the last {CALENDAR_DAYS} days, for {', '.join(tickers)}:"]
+        lines += [f"- {e['event_date']} {events.event_line(e)}" for e in recent]
+    return "\n".join(lines)
 
 
 def build_context(conn, question: str) -> tuple[str, list[str]]:
@@ -92,6 +112,10 @@ def build_context(conn, question: str) -> tuple[str, list[str]]:
             lines.append(f"{h['session_date']} | {h['status']} | {h['category']} | {h['return_1d_pct']} | "
                          f"{h['return_zscore']} | {h['volume_vs_avg']} | {vs_sector} | {h['move_read'] or ''}")
         add("\n".join(lines))
+
+    calendar = calendar_section(conn, tickers)
+    if calendar:
+        add(calendar)
 
     # Retrieved passages from reports that aren't already included in full
     for p in find_passages(question):

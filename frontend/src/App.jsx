@@ -5,6 +5,7 @@ import { useLiveEvents } from './useLiveEvents'
 import { routes, useRoute } from './useRoute'
 import AskPanel from './components/AskPanel'
 import CalendarTab from './components/CalendarTab'
+import ComingUp from './components/ComingUp'
 import PreviousDaysPreview from './components/PreviousDaysPreview'
 import PreviousDaysTab from './components/PreviousDaysTab'
 import ReportView from './components/ReportView'
@@ -114,6 +115,7 @@ export default function App() {
 
             <aside className="side">
               <RunPanel run={run} onStarted={onRunStarted} lastSaved={lastSaved} />
+              <ComingUp version={calendarVersion} />
               <AskPanel />
             </aside>
           </main>

@@ -101,7 +101,7 @@ export default function App() {
             </section>
 
             <aside className="side">
-              <RunPanel run={run} onStarted={onRunStarted} />
+              <RunPanel run={run} onStarted={onRunStarted} lastSaved={lastSaved} />
               <AskPanel />
             </aside>
           </main>

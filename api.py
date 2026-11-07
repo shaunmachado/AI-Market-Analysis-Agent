@@ -12,6 +12,7 @@ Endpoints:
     GET  /api/tickers/{TICKER}/prices?range=1mo|3mo|6mo|1y   daily prices for charts
     GET  /api/search?q=...&limit=12&ticker=&since=&until=     search passages in all reports
     GET  /api/search/status     what the search index contains
+    GET  /api/alerts?limit=10   Discord alerts: whether they're on here, and the latest ones
     GET  /api/events            live updates (Server-Sent Events)
     GET  /api/runs/current      the on-demand run in progress, or the last one
     POST /api/runs              write a fresh report now
@@ -24,6 +25,7 @@ If frontend/dist exists (after `npm run build`), the app is served at /.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import threading
@@ -39,6 +41,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+import alerts
 import ask
 import prices
 import reports_db
@@ -158,6 +161,8 @@ def ticker_prices(request):
 # Search (the retrieval part of RAG). The index lives in search.db, never in reports.db.
 # ---------------------------------------------------------------------------
 
+log = logging.getLogger(__name__)
+
 _index_lock = threading.Lock()  # one background embedding job at a time
 _background = set()  # keeps background tasks alive until they finish
 
@@ -175,6 +180,18 @@ def update_index_in_background() -> None:
     task = asyncio.create_task(asyncio.to_thread(_update_index_quietly))
     _background.add(task)
     task.add_done_callback(_background.discard)
+
+
+def alerts_status(request):
+    """Whether runs started from this server send Discord alerts, and the latest alerts
+    sent by any run (scheduled runs included)."""
+    try:
+        limit = _limit(request, default=10, maximum=100)
+    except BadRequest as e:
+        return _error(400, str(e))
+    with _db() as conn:
+        latest = alerts.recent(conn, limit)
+    return JSONResponse({"enabled": alerts.enabled(), "alerts": latest})
 
 
 def search_reports(request):
@@ -472,6 +489,7 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> Starlette:
         Route("/api/reports/{session_date}", get_report),
         Route("/api/tickers/{ticker}/history", ticker_history),
         Route("/api/tickers/{ticker}/prices", ticker_prices),
+        Route("/api/alerts", alerts_status),
         Route("/api/search", search_reports),
         Route("/api/search/status", search_status),
         Route("/api/events", events),

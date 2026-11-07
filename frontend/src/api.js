@@ -26,6 +26,8 @@ export const getPrices = (ticker, range) =>
 export const searchReports = (q, limit = 12) =>
   request(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`)
 
+export const getAlerts = (limit = 10) => request(`/api/alerts?limit=${limit}`)
+
 export const getTickerHistory = (ticker, limit = 365) =>
   request(`/api/tickers/${encodeURIComponent(ticker)}/history?limit=${limit}`).then((body) => body.history)
 

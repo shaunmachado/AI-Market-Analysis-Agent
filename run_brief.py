@@ -45,6 +45,7 @@ from claude_agent_sdk import (  # noqa: E402
     query,
 )
 
+import alerts  # noqa: E402
 import reports_db  # noqa: E402
 import search_index  # noqa: E402
 from market_tools import flag_events, market_session, now_et  # noqa: E402
@@ -64,6 +65,7 @@ options = ClaudeAgentOptions(
     tools=[],                # turn off built-in tools: no shell, no file access
     allowed_tools=[          # MCP tools are named mcp__<server>__<tool>
         "mcp__market__flag_events",
+        "mcp__market__market_backdrop",
         "mcp__market__compute_moves",
         "mcp__market__get_news",
     ],
@@ -95,6 +97,20 @@ def tool_payload(block: ToolResultBlock):
     return values[0] if len(values) == 1 else values
 
 
+async def send_alerts(session_date: str, emit) -> None:
+    """Discord alerts for the report just saved (or one whose alert failed before).
+    Alerts never fail a run: problems are shown as warnings and retried next run."""
+    try:
+        outcome = await asyncio.to_thread(alerts.notify, session_date)
+    except Exception as e:
+        emit({"type": "warning", "message": f"Alerts couldn't be checked ({e}). The next run will try again."})
+        return
+    for label in outcome["sent"]:
+        emit({"type": "alert", "message": f"Discord: sent {label}"})
+    for label in outcome["failed"]:
+        emit({"type": "warning", "message": f"Discord alert failed: {label}. The next run will try again."})
+
+
 async def run_once(emit=None) -> dict:
     """Run the agent once and save the report.
 
@@ -113,6 +129,7 @@ async def run_once(emit=None) -> dict:
                 event = {"type": "skipped", "session_date": session_date,
                          "message": f"The final report for {session_date} is already saved. Nothing to do."}
                 emit(event)
+                await send_alerts(session_date, emit)  # retries a summary that failed to send earlier
                 return event
         prompt = (f"It is {now:%Y-%m-%d %H:%M} ET and the market is closed. "
                   f"Write the watchlist brief for the {session_date} session.")
@@ -172,6 +189,8 @@ async def run_once(emit=None) -> dict:
         await asyncio.to_thread(search_index.sync)
     except Exception as e:
         emit({"type": "warning", "message": f"Saved, but the search index wasn't updated ({e}). It will catch up later."})
+
+    await send_alerts(session_date, emit)
     return event
 
 

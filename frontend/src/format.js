@@ -17,9 +17,17 @@ export const formatMonthShort = (day) =>
 export const formatTime = (utc) =>
   utc ? new Date(utc).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : ''
 
+export const formatDateTime = (utc) =>
+  utc
+    ? new Date(utc).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : ''
+
 export const number = (value, digits) => (value == null ? '—' : value.toFixed(digits))
 
 export const percent = (value) => (value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`)
+
+// Percentage points, for a gap between two percentages (e.g. a stock vs. its sector)
+export const points = (value) => (value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)} pts`)
 
 // Only allow normal web links from news sources
 export const safeUrl = (url) => (/^https?:\/\//i.test(url || '') ? url : undefined)

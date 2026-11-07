@@ -1,5 +1,5 @@
 import { useOpenChart } from '../chartContext'
-import { number, percent } from '../format'
+import { number, percent, points } from '../format'
 
 const ChartIcon = () => (
   <svg className="chart-icon" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
@@ -22,6 +22,7 @@ export default function TickerTable({ tickers }) {
             <th className="num">Change</th>
             <th className="num">z-score</th>
             <th className="num">Volume</th>
+            <th className="num">Vs. sector</th>
           </tr>
         </thead>
         <tbody>
@@ -43,6 +44,16 @@ export default function TickerTable({ tickers }) {
               </td>
               <td className="num">{number(t.return_zscore, 1)}</td>
               <td className="num">{t.volume_vs_avg == null ? '—' : `${t.volume_vs_avg}×`}</td>
+              <td className="num vs-sector" title={t.context_summary || undefined}>
+                {t.vs_benchmark_pct == null ? (
+                  '—'
+                ) : (
+                  <>
+                    {points(t.vs_benchmark_pct)} <span className="muted">vs {t.benchmark}</span>
+                    {t.move_read && <span className="move-read">{t.move_read}</span>}
+                  </>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

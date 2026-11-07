@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS report_tickers (
     volume_vs_avg  REAL,
     compared_to    TEXT,
     error          TEXT,
+    -- Sector and market context (flagged tickers; empty for reports saved before it existed)
+    benchmark            TEXT,   -- sector ETF it was compared with, e.g. XLK (or SPY)
+    benchmark_return_pct REAL,
+    market_return_pct    REAL,   -- S&P 500 (SPY)
+    vs_benchmark_pct     REAL,   -- ticker minus benchmark, in percentage points
+    vs_benchmark_zscore  REAL,   -- how unusual that gap was
+    move_read            TEXT,   -- stock-specific, sector-wide, market-wide, mixed or in line
+    context_summary      TEXT,
     PRIMARY KEY (session_date, ticker)
 );
 
@@ -78,6 +86,12 @@ WHEN (SELECT status FROM reports WHERE session_date = {_row}.session_date) = 'fi
 BEGIN SELECT RAISE(ABORT, 'final reports are permanent'); END;
 """
 
+# Columns added after the first version. connect() adds them to older databases.
+ADDED_TICKER_COLUMNS = {
+    "benchmark": "TEXT", "benchmark_return_pct": "REAL", "market_return_pct": "REAL",
+    "vs_benchmark_pct": "REAL", "vs_benchmark_zscore": "REAL", "move_read": "TEXT", "context_summary": "TEXT",
+}
+
 # save_report() outcomes
 CREATED, UPDATED, FINALIZED = "created", "updated", "finalized"
 SKIPPED_FINAL, SKIPPED_STALE = "skipped_final_exists", "skipped_older_update"
@@ -97,9 +111,19 @@ def connect(path: Path | None = None, readonly: bool = False) -> sqlite3.Connect
         conn = sqlite3.connect(path, isolation_level=None, timeout=10)
         conn.execute("PRAGMA journal_mode = WAL")  # lets the API read while a run is writing
         conn.executescript(SCHEMA)
+        _add_missing_columns(conn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _add_missing_columns(conn) -> None:
+    """Upgrade a database made by an earlier version. Existing rows (final ones included)
+    are not changed: the new columns are simply empty for them."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(report_tickers)")}
+    for name, kind in ADDED_TICKER_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE report_tickers ADD COLUMN {name} {kind}")
 
 
 def _utc_now() -> str:
@@ -155,15 +179,27 @@ def save_report(conn, *, session_date, status, title, body_md, as_of,
     return outcome
 
 
+TICKER_COLUMNS = ("session_date", "ticker", "category", "price", "return_1d_pct", "return_5d_pct",
+                  "return_zscore", "volume_vs_avg", "compared_to", "error", *ADDED_TICKER_COLUMNS)
+
+
 def _insert_details(conn, session_date, scan, sources):
     rows = {}
     for category, key in (("flagged", "flagged"), ("quiet", "quiet"), ("error", "errors")):
         for m in scan.get(key) or []:
+            context = m.get("context") or {}
+            if "error" in context:  # comparison unavailable: keep the move, leave context empty
+                context = {}
             rows[m["ticker"]] = (
                 session_date, m["ticker"], category, m.get("last_close", m.get("last_price")),
                 m.get("return_1d_pct"), m.get("return_5d_pct"), m.get("return_zscore"),
-                m.get("volume_vs_avg"), m.get("compared_to"), m.get("error"))
-    conn.executemany("INSERT INTO report_tickers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows.values())
+                m.get("volume_vs_avg"), m.get("compared_to"), m.get("error"),
+                context.get("benchmark"), context.get("benchmark_return_pct"), context.get("market_return_pct"),
+                context.get("vs_benchmark_pct"), context.get("vs_benchmark_zscore"), context.get("read"),
+                context.get("summary"))
+    conn.executemany(
+        f"INSERT INTO report_tickers ({', '.join(TICKER_COLUMNS)}) VALUES ({', '.join('?' * len(TICKER_COLUMNS))})",
+        rows.values())
     conn.executemany(
         """INSERT INTO report_sources (session_date, ticker, title, publisher, url, published)
            VALUES (?, ?, ?, ?, ?, ?)""",
@@ -200,16 +236,24 @@ def get_report(conn, session_date: str) -> dict | None:
     if row is None:
         return None
     report = dict(row)
-    report["tickers"] = [dict(t) for t in conn.execute(
-        """SELECT ticker, category, price, return_1d_pct, return_5d_pct, return_zscore,
-                  volume_vs_avg, compared_to, error
-           FROM report_tickers WHERE session_date = ?
+    report["tickers"] = [_ticker_row(t) for t in conn.execute(
+        """SELECT * FROM report_tickers WHERE session_date = ?
            ORDER BY CASE category WHEN 'flagged' THEN 0 WHEN 'quiet' THEN 1 ELSE 2 END, ticker""",
         (session_date,))]
     report["sources"] = [dict(s) for s in conn.execute(
         """SELECT ticker, title, publisher, url, published FROM report_sources
            WHERE session_date = ? ORDER BY ticker, id""", (session_date,))]
     return report
+
+
+def _ticker_row(row) -> dict:
+    """One ticker's figures. SELECT * so a database from an earlier version still reads
+    (it just has no context columns yet)."""
+    data = dict(row)
+    data.pop("session_date", None)
+    for name in ADDED_TICKER_COLUMNS:
+        data.setdefault(name, None)
+    return data
 
 
 def latest_report(conn) -> dict | None:
@@ -219,12 +263,11 @@ def latest_report(conn) -> dict | None:
 
 def ticker_history(conn, ticker: str, limit: int = 30) -> list[dict]:
     """One ticker's figures across days, newest first (for charts)."""
-    return [dict(row) for row in conn.execute(
-        """SELECT t.session_date, r.status, t.category, t.price, t.return_1d_pct, t.return_5d_pct,
-                  t.return_zscore, t.volume_vs_avg, t.compared_to, t.error
-           FROM report_tickers t JOIN reports r ON r.session_date = t.session_date
+    rows = conn.execute(
+        """SELECT t.*, r.status FROM report_tickers t JOIN reports r ON r.session_date = t.session_date
            WHERE t.ticker = ? ORDER BY t.session_date DESC LIMIT ?""",
-        (ticker.upper(), limit))]
+        (ticker.upper(), limit))
+    return [{"session_date": row["session_date"], **_ticker_row(row)} for row in rows]
 
 
 if __name__ == "__main__":

@@ -86,10 +86,11 @@ def build_context(conn, question: str) -> tuple[str, list[str]]:
 
     for ticker in tickers:
         lines = [f"## Figures for {ticker} (newest first)",
-                 "date | status | category | return % | z-score | volume vs normal"]
-        lines += [f"{h['session_date']} | {h['status']} | {h['category']} | {h['return_1d_pct']} | "
-                  f"{h['return_zscore']} | {h['volume_vs_avg']}"
-                  for h in reports_db.ticker_history(conn, ticker, limit=60)]
+                 "date | status | category | return % | z-score | volume vs normal | vs sector (points) | kind of move"]
+        for h in reports_db.ticker_history(conn, ticker, limit=60):
+            vs_sector = "" if h["vs_benchmark_pct"] is None else f"{h['vs_benchmark_pct']} vs {h['benchmark']}"
+            lines.append(f"{h['session_date']} | {h['status']} | {h['category']} | {h['return_1d_pct']} | "
+                         f"{h['return_zscore']} | {h['volume_vs_avg']} | {vs_sector} | {h['move_read'] or ''}")
         add("\n".join(lines))
 
     # Retrieved passages from reports that aren't already included in full

@@ -1,11 +1,12 @@
-import { useState } from 'react'
-import { startRun } from '../api'
-import { formatTime } from '../format'
+import { useEffect, useState } from 'react'
+import { getAlerts, startRun } from '../api'
+import { formatDateTime, formatTime } from '../format'
 
 const STEP_NAMES = {
   flag_events: () => 'Scanning the watchlist',
   get_news: (input) => `Reading news for ${input.ticker}`,
   compute_moves: (input) => `Checking ${input.ticker} in detail`,
+  market_backdrop: () => 'Checking the market and sectors',
 }
 
 function describe(event) {
@@ -23,7 +24,38 @@ function describe(event) {
   }
 }
 
-export default function RunPanel({ run, onStarted }) {
+// One line on Discord alerts: on or off for runs started here, and the latest one sent by any run
+function AlertsStatus({ refreshKey }) {
+  const [info, setInfo] = useState(null)
+
+  useEffect(() => {
+    const load = () =>
+      getAlerts()
+        .then(setInfo)
+        .catch(() => setInfo(null))
+    load()
+    const timer = setInterval(load, 60_000) // scheduled runs send alerts a moment after saving
+    return () => clearInterval(timer)
+  }, [refreshKey])
+
+  if (!info) return null
+  const last = info.alerts.find((a) => a.status !== 'pending')
+  return (
+    <p className="muted small alerts-status">
+      {info.enabled ? 'Discord alerts on' : 'Discord alerts off for runs started here'}
+      {last?.status === 'sent' &&
+        ` · last sent ${formatDateTime(last.sent_at)} (${last.kind === 'summary' ? 'daily summary' : last.ticker})`}
+      {last?.status === 'failed' && (
+        <span className="alert-failed" title={last.error}>
+          {' '}
+          · last alert failed: {last.error}
+        </span>
+      )}
+    </p>
+  )
+}
+
+export default function RunPanel({ run, onStarted, lastSaved }) {
   const [error, setError] = useState(null)
   const [sending, setSending] = useState(false)
   const running = run?.state === 'running'
@@ -50,6 +82,7 @@ export default function RunPanel({ run, onStarted }) {
         {running ? 'Writing report…' : 'Run update now'}
       </button>
       {error && <p className="error">{error}</p>}
+      <AlertsStatus refreshKey={`${lastSaved?.updated_at}|${run?.finished_at}`} />
 
       {run && run.state !== 'idle' && (
         <div className="run-log" aria-live="polite">

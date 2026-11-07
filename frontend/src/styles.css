@@ -159,6 +159,9 @@ textarea {
 
 /* Ticker rows open a chart */
 .tickers tr.clickable { cursor: pointer; }
+.tickers .move-read { display: block; font-size: 0.75rem; color: var(--muted); }
+.alerts-status { margin: 10px 0 0; overflow-wrap: anywhere; }
+.alerts-status .alert-failed { color: var(--down); }
 .tickers tr.clickable:hover td { background: var(--bg); }
 .ticker-button {
   all: unset; cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; border-radius: 4px;

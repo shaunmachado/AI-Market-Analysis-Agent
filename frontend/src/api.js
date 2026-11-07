@@ -28,6 +28,15 @@ export const searchReports = (q, limit = 12) =>
 
 export const getAlerts = (limit = 10) => request(`/api/alerts?limit=${limit}`)
 
+export const getCalendar = (start, end) => request(`/api/calendar?start=${start}&end=${end}`)
+
+export async function startCalendarScan() {
+  const response = await postJSON('/api/calendar/scan', {})
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`)
+  return body.scan
+}
+
 export const getTickerHistory = (ticker, limit = 365) =>
   request(`/api/tickers/${encodeURIComponent(ticker)}/history?limit=${limit}`).then((body) => body.history)
 

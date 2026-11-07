@@ -13,13 +13,18 @@ Endpoints:
     GET  /api/search?q=...&limit=12&ticker=&since=&until=     search passages in all reports
     GET  /api/search/status     what the search index contains
     GET  /api/alerts?limit=10   Discord alerts: whether they're on here, and the latest ones
+    GET  /api/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD   upcoming events (and past ones) between two dates
+    POST /api/calendar/scan     update the events calendar now
+    GET  /api/calendar/scan     the calendar update in progress, or the last one
     GET  /api/events            live updates (Server-Sent Events)
     GET  /api/runs/current      the on-demand run in progress, or the last one
     POST /api/runs              write a fresh report now
     POST /api/ask               ask Claude about saved reports (streams the answer)
 
 Reports are only read here, through a read-only database connection. The one
-thing that writes is a run, through run_brief.py's normal storage rules.
+thing that writes reports is a run, through run_brief.py's normal storage rules.
+The events calendar is written the same way, by events.py's scan (daily at the
+market open, or "Update now").
 If frontend/dist exists (after `npm run build`), the app is served at /.
 """
 
@@ -31,7 +36,7 @@ import re
 import threading
 import time
 from contextlib import asynccontextmanager, closing
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -43,6 +48,7 @@ from starlette.staticfiles import StaticFiles
 
 import alerts
 import ask
+import events as upcoming  # events.py ("events" here is the live-updates endpoint)
 import prices
 import reports_db
 import run_brief
@@ -53,7 +59,9 @@ TICKER = re.compile(r"[A-Za-z0-9.\-^=]{1,15}")
 FRONTEND_ORIGINS = [o.strip() for o in os.environ.get(
     "FRONTEND_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",") if o.strip()]
 RUN_COOLDOWN_SECONDS = int(os.environ.get("RUN_COOLDOWN_SECONDS", "60"))  # between on-demand runs
-POLL_SECONDS = float(os.environ.get("REPORT_POLL_SECONDS", "2"))          # how often to check for new reports
+CALENDAR_SCAN_COOLDOWN_SECONDS = int(os.environ.get("CALENDAR_SCAN_COOLDOWN_SECONDS", "300"))
+MAX_CALENDAR_DAYS = 100                                                   # longest date range one request returns
+POLL_SECONDS = float(os.environ.get("REPORT_POLL_SECONDS", "2"))         # how often to check for new reports
 AUTO_CLOSE = os.environ.get("AUTO_CLOSE_RUN", "1") != "0"                 # write the final report after the close
 AUTO_CLOSE_TIME = os.environ.get("AUTO_CLOSE_TIME", "16:15")              # Eastern time, 15 minutes after the bell
 AUTO_CLOSE_CHECK_SECONDS = float(os.environ.get("AUTO_CLOSE_CHECK_SECONDS", "30"))
@@ -194,6 +202,31 @@ def alerts_status(request):
     return JSONResponse({"enabled": alerts.enabled(), "alerts": latest})
 
 
+def calendar(request):
+    """Events between start and end. Without dates: this month's calendar (6 weeks from its first day)."""
+    today = upcoming.today_et()
+    start, end = request.query_params.get("start"), request.query_params.get("end")
+    try:
+        for name, value in (("start", start), ("end", end)):
+            if value and not DATE.fullmatch(value):
+                raise BadRequest(f"{name} must be a date like 2026-11-06")
+        first = date.fromisoformat(start) if start else today.replace(day=1)
+        last = date.fromisoformat(end) if end else first + timedelta(days=41)
+        if last < first:
+            raise BadRequest("end must be on or after start")
+        if (last - first).days > MAX_CALENDAR_DAYS:
+            raise BadRequest(f"ask for at most {MAX_CALENDAR_DAYS} days at a time")
+    except BadRequest as e:
+        return _error(400, str(e))
+    except ValueError:
+        return _error(400, "that isn't a real date")
+    with _db() as conn:
+        found = upcoming.events_between(conn, first.isoformat(), last.isoformat())
+        scanned = upcoming.last_scan(conn)
+    return JSONResponse({"today": today.isoformat(), "start": first.isoformat(), "end": last.isoformat(),
+                         "events": found, "last_scan": scanned, "scan": calendar_scans.snapshot()})
+
+
 def search_reports(request):
     q = request.query_params.get("q", "").strip()
     ticker = request.query_params.get("ticker")
@@ -248,6 +281,13 @@ class EventHub:
 hub = EventHub()
 
 
+def _latest_calendar_scan() -> dict | None:
+    """The most recent events scan, from any program (the daily schedule included)."""
+    with _db() as conn:
+        scanned = upcoming.last_scan(conn)
+    return {k: scanned[k] for k in ("id", "status", "finished_at")} if scanned else None
+
+
 def _latest_change() -> dict | None:
     """The most recently saved report: changes whenever any run saves (scheduled or on demand)."""
     with _db() as conn:
@@ -258,23 +298,31 @@ def _latest_change() -> dict | None:
 
 async def watch_reports() -> None:
     """Checks the database every few seconds and announces new or updated reports."""
-    last = await asyncio.to_thread(_latest_change)
+    def check():  # both in one trip to a worker thread
+        return _latest_change(), _latest_calendar_scan()
+
+    last, last_scan = await asyncio.to_thread(check)
     while True:
         await asyncio.sleep(POLL_SECONDS)
         try:
-            current = await asyncio.to_thread(_latest_change)
+            current, scan = await asyncio.to_thread(check)
         except Exception:  # e.g. the database is briefly locked; try again next time
             continue
         if current and current != last:
             last = current
             hub.publish({"type": "report_saved", **current})
             update_index_in_background()  # covers scheduled runs, which are separate programs
+        if scan and scan != last_scan:
+            last_scan = scan
+            if scan["finished_at"]:  # a calendar update finished (scheduled or "Update now")
+                hub.publish({"type": "calendar_updated", "scan": scan})
 
 
 async def events(request):
     """Server-Sent Events stream. The browser's EventSource reconnects on its own."""
     queue = hub.subscribe()
-    hello = {"type": "hello", "run": runs.snapshot(), "latest": await asyncio.to_thread(_latest_change)}
+    hello = {"type": "hello", "run": runs.snapshot(), "latest": await asyncio.to_thread(_latest_change),
+             "calendar_scan": calendar_scans.snapshot()}
 
     async def stream():
         try:
@@ -359,6 +407,54 @@ class RunManager:
 runs = RunManager()
 
 
+class CalendarScanManager:
+    """One "Update now" calendar scan at a time, with a cooldown to cap Claude's cost."""
+
+    def __init__(self):
+        self.task = None
+        self.last_started = None
+        self.state = {"state": "idle", "started_at": None, "finished_at": None, "message": None,
+                      "result": None, "error": None}
+
+    def snapshot(self) -> dict:
+        return dict(self.state)
+
+    def start(self) -> dict:
+        if self.task and not self.task.done():
+            raise AlreadyRunning("The calendar is already being updated.")
+        if self.last_started is not None:
+            wait = CALENDAR_SCAN_COOLDOWN_SECONDS - (time.monotonic() - self.last_started)
+            if wait > 0:
+                seconds = int(wait) + 1
+                raise TooSoon(f"The calendar was just updated. Try again in {seconds} second{'s' if seconds != 1 else ''}.")
+        self.last_started = time.monotonic()
+        self.state = {"state": "running", "started_at": _utc_now(), "finished_at": None,
+                      "message": "Starting…", "result": None, "error": None}
+        hub.publish({"type": "calendar_scan", "scan": self.snapshot()})
+        self.task = asyncio.create_task(self._run())
+        return self.snapshot()
+
+    def _progress(self, event: dict) -> None:
+        if event["type"] == "progress":
+            self.state["message"] = event["message"]
+            hub.publish({"type": "calendar_scan", "scan": self.snapshot()})
+
+    async def _run(self) -> None:
+        loop = asyncio.get_running_loop()
+        emit = lambda event: loop.call_soon_threadsafe(self._progress, event)  # noqa: E731  (scan runs in a thread)
+        try:
+            result = await asyncio.to_thread(upcoming.scan, "manual", emit)
+            result.pop("dropped_reasons", None)
+            self.state.update(state="finished", result=result, message=None)
+        except Exception as e:  # including ScanBusy: the daily scan is running right now
+            self.state.update(state="failed", error=str(e) or type(e).__name__, message=None)
+        self.state["finished_at"] = _utc_now()
+        hub.publish({"type": "calendar_scan", "scan": self.snapshot()})
+
+
+calendar_scans = CalendarScanManager()
+
+
 async def start_run(request):
     if blocked := _post_guard(request):
         return blocked
@@ -373,6 +469,22 @@ async def start_run(request):
 
 def current_run(request):
     return JSONResponse({"run": runs.snapshot()})
+
+
+async def start_calendar_scan(request):
+    if blocked := _post_guard(request):
+        return blocked
+    try:
+        scan = calendar_scans.start()
+    except AlreadyRunning as e:
+        return _error(409, str(e))
+    except TooSoon as e:
+        return _error(429, str(e))
+    return JSONResponse({"scan": scan}, status_code=202)
+
+
+def current_calendar_scan(request):
+    return JSONResponse({"scan": calendar_scans.snapshot()})
 
 
 active_questions = 0
@@ -490,6 +602,9 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> Starlette:
         Route("/api/tickers/{ticker}/history", ticker_history),
         Route("/api/tickers/{ticker}/prices", ticker_prices),
         Route("/api/alerts", alerts_status),
+        Route("/api/calendar", calendar),
+        Route("/api/calendar/scan", start_calendar_scan, methods=["POST"]),
+        Route("/api/calendar/scan", current_calendar_scan, methods=["GET"]),
         Route("/api/search", search_reports),
         Route("/api/search/status", search_status),
         Route("/api/events", events),

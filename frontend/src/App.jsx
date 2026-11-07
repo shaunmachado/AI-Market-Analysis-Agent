@@ -4,6 +4,7 @@ import { ChartContext } from './chartContext'
 import { useLiveEvents } from './useLiveEvents'
 import { routes, useRoute } from './useRoute'
 import AskPanel from './components/AskPanel'
+import CalendarTab from './components/CalendarTab'
 import PreviousDaysPreview from './components/PreviousDaysPreview'
 import PreviousDaysTab from './components/PreviousDaysTab'
 import ReportView from './components/ReportView'
@@ -17,6 +18,8 @@ export default function App() {
   const [run, setRun] = useState(null)
   const [lastSaved, setLastSaved] = useState(null) // tells the previous-days views to refresh
   const [chartTicker, setChartTicker] = useState(null)
+  const [calendarScan, setCalendarScan] = useState(null) // "Update now" on the Calendar tab
+  const [calendarVersion, setCalendarVersion] = useState(0) // tells the calendar to reload
   const chartOpener = useRef(null) // gets focus back when the chart closes
 
   const openChart = useCallback((ticker, opener) => {
@@ -49,7 +52,13 @@ export default function App() {
   const connected = useLiveEvents((event) => {
     if (event.type === 'hello') {
       setRun(event.run) // (re)connected: catch up on anything missed
+      setCalendarScan(event.calendar_scan)
+      setCalendarVersion((v) => v + 1)
       loadLatest()
+    } else if (event.type === 'calendar_scan') {
+      setCalendarScan(event.scan)
+    } else if (event.type === 'calendar_updated') {
+      setCalendarVersion((v) => v + 1) // any calendar update: the daily scan, or "Update now"
     } else if (event.type === 'report_saved') {
       loadLatest()
       setLastSaved(event)
@@ -63,6 +72,8 @@ export default function App() {
   // The live stream may have already moved the run on by the time the button's response arrives
   const onRunStarted = (started) =>
     setRun((current) => (current && current.started_at === started.started_at ? current : started))
+  const onCalendarScanStarted = (started) =>
+    setCalendarScan((current) => (current && current.started_at === started.started_at ? current : started))
 
   const tabLink = (tab, href, label) => (
     <a href={href} className={`tab ${route.tab === tab ? 'active' : ''}`} aria-current={route.tab === tab ? 'page' : undefined}>
@@ -78,6 +89,7 @@ export default function App() {
           <nav className="tabs" aria-label="Sections">
             {tabLink('today', routes.today, 'Today')}
             {tabLink('previous', routes.previous(), 'Previous days')}
+            {tabLink('calendar', routes.calendar(), 'Calendar')}
           </nav>
           <span className={`connection ${connected ? 'on' : 'off'}`}>
             {connected ? 'Live' : 'Reconnecting…'}
@@ -110,7 +122,20 @@ export default function App() {
         </div>
 
         <div hidden={route.tab !== 'previous'}>
-          <PreviousDaysTab latestDate={latest?.session_date} lastSaved={lastSaved} selectedDate={route.date} />
+          <PreviousDaysTab
+            latestDate={latest?.session_date}
+            lastSaved={lastSaved}
+            selectedDate={route.tab === 'previous' ? route.date : null}
+          />
+        </div>
+
+        <div hidden={route.tab !== 'calendar'}>
+          <CalendarTab
+            selectedDate={route.tab === 'calendar' ? route.date : null}
+            version={calendarVersion}
+            scan={calendarScan}
+            onScanStarted={onCalendarScanStarted}
+          />
         </div>
 
         {chartTicker && <TickerChart ticker={chartTicker} latestDate={latest?.session_date} onClose={closeChart} />}

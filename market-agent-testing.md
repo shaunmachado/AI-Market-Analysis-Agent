@@ -2,7 +2,7 @@
 
 How to test the market analyst agent, from quick offline checks to full runs with Claude, Discord alerts, the events calendar, tracked stocks and the schedule.
 
-This version covers the whole project, up to the guide that adds finding and tracking stocks (`market-agent-stocks.md`). For trying the app on two months of sample data, see `market-agent-test-enviro.md`.
+This version covers the whole project, up to the guide that adds finding and tracking stocks (`market-agent-stocks.md`). For trying the app on two months of sample data, see `market-agent-test-enviro.md`. For the public live demo, see `market-agent-demo.md`.
 
 ---
 
@@ -82,6 +82,8 @@ market-agent/
 | `test_calendar_links.py` | 13 | `market-agent-calendar-connect.md` |
 | `test_watchlist.py` | 33, plus 1 live check | `market-agent-stocks.md` |
 | `conftest.py` | (shared setup) | `market-agent-alerts.md` |
+
+The test environment and the live demo have their own tests, in their own folders: `pytest -v` in `market-agent-testenv/` gives `29 passed` (`market-agent-test-enviro.md`), and in `market-agent-demo/` gives `16 passed` (`market-agent-demo.md`).
 
 To create or update `test_market_tools.py`, replace its contents with the code from the [appendix](#appendix-test-file-source). **It matches `market_tools.py` from the sector context guide.** With an older `market_tools.py`, its 13 sector-context tests fail.
 

@@ -551,6 +551,7 @@ Expect `29 passed`. They use temporary databases and watchlists, so they don't c
 | Change your real watchlist and want it here too | Delete `data/watchlist.txt`, then `python testenv.py seed --reset`. It copies your real list again |
 | Add stocks on the test Stocks tab and want them to have history | `python testenv.py seed --reset`. The test watchlist is kept |
 | Want "today" to match the real date | `python testenv.py seed --reset` |
+| Have a live demo on GitHub Pages (`market-agent-demo.md`) | It makes its own copy of this sample. After changing your program, run `python demo.py build` then `python demo.py publish` in `market-agent-demo/` |
 | Add a feature that needs new sample data | Extend `sample_market.py` (for example, more event types) and add a check to `test_testenv.py` |
 
 Run `pytest -v` in **both** folders after changes: the main project's tests check your program, and the test environment's tests check it against long history and confirm the two folders stay separate.

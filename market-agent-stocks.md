@@ -3825,6 +3825,7 @@ mark { background: var(--live-bg); color: inherit; border-radius: 2px; padding: 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .tickers .group-row th { padding-top: 14px; font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .table-note { margin: 6px 0 0; }
+.table-note a { color: var(--accent); }
 .stocks-find { margin-bottom: 16px; }
 .stocks-find input[type="search"] {
   width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg);

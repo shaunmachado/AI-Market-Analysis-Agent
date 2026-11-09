@@ -2,14 +2,14 @@
 
 A separate test environment with **two months of sample reports**, so you can see how the app behaves after long-term use: paging through weeks of history, month grouping, earnings days, a day that was never finalized, and questions about trends over time.
 
-It runs your **real program's code** against its **own sample database**. Claude, market data, Voyage AI (for search) and Discord (for alerts) are simulated by default, so it costs nothing, needs no internet and never posts to your channel. It lives in its own folder next to `market-agent/` and **never writes anything into your program's folder**. An automated test checks this every time.
+It runs your **real program's code** against its **own sample database**. Claude, market data, Voyage AI (for search), Discord (for alerts) and the events calendar's sources are simulated by default, so it costs nothing, needs no internet and never posts to your channel. It lives in its own folder next to `market-agent/` and **never writes anything into your program's folder**. An automated test checks this every time.
 
-This builds on `market-agent-alerts.md`. Your program should include everything up to that guide: the Previous days tab, charts, search, sector and market context, and Discord alerts.
+This builds on `market-agent-stocks.md`. Your program should include everything up to that guide: the Previous days tab, charts, search, sector and market context, Discord alerts, the events calendar connected to briefs, alerts and Ask, and finding and tracking stocks.
 
 **Already set this up for an earlier version?**
 
 1. Replace `sample_market.py`, `testenv.py` and `test_testenv.py` with the appendix versions.
-2. Run `python testenv.py seed --reset`. The sample reports now include sector comparisons, so they need re-creating.
+2. Run `python testenv.py seed --reset`. This creates the test environment's **own watchlist**, `data/watchlist.txt`, so the Stocks tab never edits your real one, and saves prices for quiet stocks.
 3. Run `python testenv.py build-frontend`.
 
 ---
@@ -23,7 +23,7 @@ This builds on `market-agent-alerts.md`. Your program should include everything 
 5. [What's in the sample data](#5-whats-in-the-sample-data)
 6. [Things to test with two months of data](#6-things-to-test-with-two-months-of-data)
 7. [Commands reference](#7-commands-reference)
-8. [Using real Claude, Voyage or Discord (optional)](#8-using-real-claude-voyage-or-discord-optional)
+8. [Using real Claude, Voyage, Discord or Yahoo (optional)](#8-using-real-claude-voyage-discord-or-yahoo-optional)
 9. [Test the test environment](#9-test-the-test-environment)
 10. [Keeping it in step with your program](#10-keeping-it-in-step-with-your-program)
 11. [Troubleshooting](#11-troubleshooting)
@@ -48,6 +48,7 @@ projects/
     │   ├── reports.db             the sample database
     │   ├── search.db              its search index
     │   ├── alerts_outbox.jsonl    the Discord alerts it "sent" (created by the first alert)
+    │   ├── watchlist.txt          its own watchlist: the Stocks tab edits this copy, never yours
     │   └── sample_config.json     the settings used, so data can be recreated
     └── frontend-dist/             created by `build-frontend`: your app, built here
 ```
@@ -60,7 +61,10 @@ projects/
                                         ├── Claude ─────────▶ simulated (offline answers)
                                         ├── market data ────▶ simulated (sample_market.py): prices, sectors, the S&P 500
                                         ├── Voyage AI ──────▶ simulated (topic-based stand-in for search)
-                                        └── Discord ────────▶ simulated (written to data/alerts_outbox.jsonl)
+                                        ├── Discord ────────▶ simulated (written to data/alerts_outbox.jsonl)
+                                        ├── events calendar ▶ simulated company calendars and news, read by a stand-in for Claude
+                                        ├── watchlist ──────▶ data/watchlist.txt (a copy; your real one is only read)
+                                        └── stock search ───▶ simulated (a built-in list of US stocks and ETFs)
 ```
 
 | You can test | How |
@@ -74,6 +78,8 @@ projects/
 | Search and RAG | Two months of reports indexed for search, with a topic-based stand-in for Voyage, or real Voyage with `--live-embeddings` |
 | Sector and market context | Every flagged move compared with its simulated sector ETF and S&P 500, with stock-specific, sector-wide, market-wide and mixed days in the sample |
 | Discord alerts | Flag alerts and daily summaries by the real rules, written to a file (`python testenv.py alerts`), or sent to Discord with `--live-alerts` |
+| Events calendar | Two months of calendar history and the weeks ahead (earnings, ex-dividend dates and news events), the daily update (`python testenv.py events`) and **Update now**, all checked and saved by your real `events.py` |
+| Finding and tracking stocks | Search a built-in list of US stocks and ETFs offline; track, star and remove stocks in the test environment's own watchlist. A stock you add gets simulated prices and appears from the next run, as in real use |
 | A year or more of history | `python testenv.py seed --reset --months 12` |
 
 ---
@@ -83,10 +89,11 @@ projects/
 | Risk | How it's prevented |
 |---|---|
 | Changing your real reports | The test environment uses its own database, `market-agent-testenv/data/reports.db`, with its own search index and alert log. Before anything runs, it refuses to use any database inside `market-agent/`. |
+| Changing your watchlist | The test environment has its own `data/watchlist.txt`, copied from yours the first time you seed. The Stocks tab and every simulated run use that copy; your `market-agent/watchlist.txt` is only read, to make it. A test checks your file is unchanged after adding, starring and removing stocks. |
 | Changing your code | It only *reads* files in `market-agent/`. Python's cache folders (`__pycache__`) are switched off, so not even those get written. A test confirms every file in `market-agent/` is byte-for-byte unchanged. |
 | Changing your frontend build | The app is built into `market-agent-testenv/frontend-dist/`. Your `frontend/dist/` is never touched. (Vite may update its own cache inside `node_modules`, as it does on any build.) |
 | Clashing with the running app | The test app uses port **8100**. Your real API (8000) and dev server (5173) can run at the same time. |
-| Spending money | Claude, market data and Voyage are simulated unless you choose `--live-ask`, `--live-runs` or `--live-embeddings`. |
+| Spending money | Claude, market data and Voyage are simulated unless you choose `--live-ask`, `--live-runs`, `--live-embeddings` or `--live-calendar`. (`--live-search` uses Yahoo's free search.) |
 | Posting to your Discord | Alerts are written to `data/alerts_outbox.jsonl` instead, even if `DISCORD_WEBHOOK_URL` is set in your terminal. Only `serve --live-alerts` sends them. A test checks that no connection to Discord is made. |
 | Interfering with scheduled runs | Your cron or Task Scheduler entries aren't touched, and the test environment has no schedule of its own. |
 | Being set up in the wrong place | If the test folder is inside `market-agent/`, it refuses to run. |
@@ -97,7 +104,7 @@ projects/
 
 ## 3. Before you start
 
-- [ ] Your program includes everything up to `market-agent-alerts.md`, and its tests pass (`pytest -v` in `market-agent/` shows `148 passed, 1 skipped`)
+- [ ] Your program includes everything up to `market-agent-stocks.md`, and its tests pass (`pytest -v` in `market-agent/` shows `241 passed, 3 skipped`)
 - [ ] You've run `npm install` in `market-agent/frontend` (from the frontend guide)
 - [ ] You know where your `market-agent` folder is. The test environment goes **next to it**, in the same parent folder
 
@@ -164,11 +171,16 @@ This takes a second or two. It prints a summary like this (for a run on 6 Novemb
   "sector_move_days": ["2026-09-15", "2026-10-29"],
   "kinds_of_move": {"market-wide": 7, "mixed": 4, "sector-wide": 3, "stock-specific": 13},
   "search_index": {"reports": 44, "passages": 73},
-  "alerts": {"logged": 0, "outbox_messages": 0}
+  "alerts": {"logged": 0, "outbox_messages": 0},
+  "calendar": {"upcoming": 7, "past": 17, "scans": 9,
+               "next": ["2026-11-09 Microsoft: Court hearing in patent case", "2026-11-12 Microsoft: Regulator's decision on deal",
+                        "2026-11-16 Apple: Court hearing in patent case", "2026-11-19 JPMorgan Chase: Investor day"]},
+  "watchlist": {"file": ".../market-agent-testenv/data/watchlist.txt", "tracked": 5, "main": ["AAPL", "MSFT", "NVDA"],
+                "added_since_seeding": [], "removed_since_seeding": []}
 }
 ```
 
-Your numbers will differ, because the sample ends on the day you run it and uses your watchlist. `kinds_of_move` counts the verdicts on flagged moves in final reports. `sector_move_days` are the days the sample gave one of your sectors a big move of its own.
+Your numbers will differ, because the sample ends on the day you run it and uses your watchlist. `kinds_of_move` counts the verdicts on flagged moves in final reports. `sector_move_days` are the days the sample gave one of your sectors a big move of its own. `calendar` counts events from the "today" of the sample onwards (`upcoming`) and before it (`past`), and lists the next few. `watchlist` is the test environment's own list: its main stocks, and any stocks added or removed on the Stocks tab since you seeded.
 
 ### Step 5: Build the app into the test folder
 
@@ -204,7 +216,7 @@ In a second terminal (same folder, same Python environment):
 pytest -v
 ```
 
-Expect `21 passed`. The last test confirms your `market-agent/` folder is exactly as it was.
+Expect `29 passed`. The last test confirms your `market-agent/` folder is exactly as it was.
 
 ---
 
@@ -213,17 +225,21 @@ Expect `21 passed`. The last test confirms your `market-agent/` folder is exactl
 | Item | Detail |
 |---|---|
 | **Date range** | Two calendar months back from today (or from `--end`), trading days only. Weekends and NYSE holidays are skipped: ending 6 Nov 2026 gives 8 Sep to 6 Nov, 44 trading days, with Labor Day skipped. |
-| **Tickers** | Your `market-agent/watchlist.txt` (only read), or `--tickers` |
+| **Tickers** | The test environment's own watchlist, `data/watchlist.txt`. The first `seed` copies your `market-agent/watchlist.txt` (only read) and, if it has no stars, stars the first 3 so the Today tab shows main stocks and "N more". Later seeds keep it, so stocks you added get two months of history. `--tickers` replaces it |
+| **Stock search** | A built-in list of 35 well-known US stocks and ETFs (Costco, Coca-Cola, Berkshire Hathaway, SPY, SMH and so on), plus a few that can't be tracked (listings outside the US, Bitcoin, an index, a future, a mutual fund) to show the filtering. Searches and checks go through your real `watchlist.py` |
+| **Stocks added later** | Get their own simulated prices, news days and company calendar, without changing anything for the stocks already in the sample. Past reports don't include them; they appear from the next run (`update`, `finalize` or Run update now), as in real use. Removed stocks leave the next run |
 | **Prices and volume** | Simulated for each ticker with realistic day-to-day swings, built from a market move, a move for its sector, and its own move. **Not real prices.** |
 | **Sectors and the S&P 500** | The S&P 500 (SPY) and all 11 sector ETFs are simulated too. AAPL, MSFT and NVDA are Technology (XLK), AMZN is Consumer Discretionary (XLY), JPM is Financials (XLF), and any other ticker gets a sector picked from its name. A few days give one sector a big move of its own ("A sector-wide rally in … stocks"), with busy trading in its tickers |
 | **Verdicts and backdrop** | Worked out with your program's own rules from `market_tools.py` (`describe_context` and `describe_backdrop`), so the "Vs. sector and market" lines, the table's Vs. sector column and the "Market backdrop" section read exactly like real ones |
 | **Alerts** | The seeded history has none. `update`, `finalize` and Run update now send simulated alerts by the real rules from then on |
+| **Events calendar** | Built as daily use would have built it: a simulated scan each Monday of the two months, then one for "today". Each scan uses your real `events.py`, so the same checks, matching and storage rules apply. The data it reads is simulated: company calendars (quarterly earnings dates from each ticker's earnings day, sometimes an unconfirmed window, and ex-dividend dates for AAPL, MSFT and JPM); sample news announcing about two dated events a week (product launches, court hearings, investor days, shareholder votes, regulatory decisions), plus earnings previews; and a free stand-in for Claude that reports those events from the headlines it's given. |
 | **Earnings** | One earnings day per ticker within the range: a large move on heavy volume, with a matching headline |
 | **Other news** | About a 4% chance per ticker per day of a news-driven move (upgrades, downgrades, product news and so on), and roughly one market-wide day every 20 sessions |
 | **Unexplained moves** | Normal random swings sometimes cross the flagging threshold. Those say "No clear catalyst found", as your agent should. |
 | **News sources** | Fictional publishers (Sample Wire, Demo Markets Daily, Example Financial News) linking to `news.example.com`, a domain reserved for examples |
 | **How reports were saved** | Through your real `save_report()`, following the real storage rules. Most days have intraday updates at 10:45 and 12:30, then a final report at 8:16 the next morning (or 4:30pm the same day), with timestamps to match. |
 | **Edge cases** | One day mid-range was never finalized and shows "Intraday (not finalized)". The latest day is left as a live intraday report if the range ends on a trading day. Early-close days say so in the brief. |
+| **Coming up** | Every sample brief ends with "Coming up": the next 7 days of earnings and ex-dividend dates, and news events announced by then, in your program's own line format. Simulated runs call `upcoming_events` like the real agent; the daily summary alert, offline Ask and the Today tab's card read the sample calendar through your real code |
 | **Marked as sample** | Every brief says "Sample data for the test environment: prices and news are simulated." |
 | **Repeatable** | The same settings always give identical data. Use `--seed` with any number for a different set. |
 | **Simulated cost** | Each report has a plausible Claude cost, so cost totals have data. No money is spent. |
@@ -294,6 +310,40 @@ Work through these with `python testenv.py serve` running. Run `python testenv.p
 - [ ] `python testenv.py alerts --clear` empties the outbox. The alert log in the sample database stays, so already-sent alerts still aren't repeated; `seed --reset` starts alerts from scratch
 - [ ] With `serve --live-alerts` (section 8), the same messages arrive in your Discord channel
 
+**Events calendar**
+
+- [ ] The **Calendar** tab opens on the sample's month, with just company names on each day. Today is circled, and past days are shown more quietly
+- [ ] The `next` events from `status` are on their days. Clicking one opens its page: "In the news", one or two sentences, and a link to its (fictional) article
+- [ ] Next month shows an earnings date marked "(date not confirmed)" with its window, an analysts' estimate and a Yahoo Finance link
+- [ ] Past earnings days (`earnings_days` in `status`) are on the calendar, some with an "In the news" preview
+- [ ] **Update now** shows "Checking …'s calendar and news" and "Reading … headlines", then "Updated" with the new time, and nothing is doubled. Pressing again straight away explains the cooldown (15 seconds here)
+- [ ] In a second terminal, `python testenv.py events` (the daily update) refreshes the open calendar's "Updated" time within a couple of seconds
+- [ ] At phone width, days show tickers, and an opened day scrolls into view
+- [ ] The calendar is plain data you can read yourself: in `market-agent/`, `REPORTS_DB=../market-agent-testenv/data/reports.db python events.py list` lists the sample's upcoming events (from the real today onwards). Only use `list` or `show` this way: `scan` would use real Yahoo and Claude
+
+**Coming up (the calendar in briefs, alerts and Ask)**
+
+- [ ] The Today tab's **Coming up** card lists the `next` events from `status` that fall in the next week. Clicking one opens its day on the Calendar tab
+- [ ] The latest report ends with a "Coming up" section listing the same events
+- [ ] **Run update now** shows "Checking the events calendar" in its steps
+- [ ] Ask **What's coming up next week?** (one of the examples: click it, then Ask). The offline answer lists the next events, cited as (calendar)
+- [ ] Ask "What's next for MSFT?": the answer includes its next calendar event
+- [ ] After `python testenv.py update` then `finalize`, `python testenv.py alerts` shows the daily summary ending with "Coming up:"
+- [ ] Searching "earnings" finds the earnings days, not the days before them: "Coming up" is left out of search
+
+**Finding and tracking stocks**
+
+- [ ] The Today tab shows only the 3 main stocks, with "Showing your main stocks. 2 more in this report". Its link opens the **Stocks** tab
+- [ ] The Stocks tab shows "5 of 25 tracked · 3 of 10 main", the main and other stocks in two groups, and each stock's price, status and next event
+- [ ] Searching "costco" offers `COST` only (not `COST.MX`); "bitcoin" offers nothing; "semiconductor" offers `SMH`
+- [ ] **Track as main** adds COST: `data/watchlist.txt` gains `*COST`, and its next earnings date appears within a few seconds. It says "first report next run"
+- [ ] **Run update now** (or `python testenv.py update`): COST gets figures and joins the Today tab. Its chart opens from the Stocks tab
+- [ ] Unstar the day's flagged stock: it moves under "Also flagged" on the Today tab
+- [ ] **Remove** asks once more; **Keep** cancels
+- [ ] Add a line such as `*KO` to `data/watchlist.txt` in an editor: the Stocks tab shows it within a few seconds
+- [ ] `python testenv.py status` lists the stocks you added under `added_since_seeding`. `python testenv.py seed --reset` keeps them and gives them two months of history
+- [ ] Your `market-agent/watchlist.txt` is unchanged throughout
+
 **Scale**
 
 - [ ] `python testenv.py seed --reset --months 12` creates a year (about 250 trading days). Check that both tabs stay fast and **Load older days** pages through it all
@@ -316,7 +366,8 @@ Run every command from `market-agent-testenv/` with the Python environment activ
 | `python testenv.py update` | Saves a newer intraday update for the latest day, 15 minutes after the last (like a scheduled run) |
 | `python testenv.py finalize` | Saves the latest day's final report (like the after-close or morning run) |
 | `python testenv.py alerts` | Prints the simulated Discord alerts (add `--clear` to empty the outbox) |
-| `python testenv.py reset` | Deletes the sample data, its search index and the alerts outbox (only files in `market-agent-testenv/data/`) |
+| `python testenv.py events` | Simulates the daily events-calendar update at the market open |
+| `python testenv.py reset` | Deletes the sample data, its search index and the alerts outbox (only files in `market-agent-testenv/data/`). The test watchlist is kept |
 
 **`seed` options**
 
@@ -325,7 +376,7 @@ Run every command from `market-agent-testenv/` with the Python environment activ
 | `--months N` | `2` | How far back the sample goes |
 | `--end YYYY-MM-DD` | today | Last day of the sample |
 | `--seed N` | `7` | A different, but repeatable, set of sample data |
-| `--tickers A,B,C` | your watchlist | Which tickers to simulate |
+| `--tickers A,B,C` | the test watchlist (a copy of yours the first time) | Replaces the test watchlist with these tickers (the first 3 main) |
 | `--latest intraday` or `--latest final` | `intraday` if the end date is a trading day | Whether the latest day is still live or already final |
 | `--reset` | off | Replaces existing sample data |
 
@@ -338,20 +389,23 @@ Run every command from `market-agent-testenv/` with the Python environment activ
 | `--live-runs` | Run update now, and the charts, use the real agent and real market data (section 8) |
 | `--live-embeddings` | Search and Ask's retrieval use real Voyage AI embeddings (section 8) |
 | `--live-alerts` | Run update now sends real Discord alerts about the sample data (section 8) |
+| `--live-calendar` | The calendar's Update now uses real Yahoo Finance and Claude (section 8) |
+| `--live-search` | The Stocks tab searches and checks stocks with Yahoo Finance (free; section 8) |
 
 **Settings:** set these before `serve` if you need them.
 
 | Variable | Default here | Effect |
 |---|---|---|
 | `RUN_COOLDOWN_SECONDS` | `15` | Wait between Run now presses (your real app uses 300) |
+| `CALENDAR_SCAN_COOLDOWN_SECONDS` | `15` | Wait between the calendar's Update now presses (your real app uses 300) |
 | `REPORT_POLL_SECONDS` | `2` | How often the app checks for saves by other programs |
 | `MARKET_AGENT_DIR` | `../market-agent` | Where your program is |
 
 ---
 
-## 8. Using real Claude, Voyage or Discord (optional)
+## 8. Using real Claude, Voyage, Discord or Yahoo (optional)
 
-Offline mode tests everything except Claude's, Voyage's and Discord's own output. When you want to see real answers over long history, set `ANTHROPIC_API_KEY` in the terminal and start the server with a live option.
+Offline mode tests everything except Claude's, Voyage's, Discord's and Yahoo's own output. When you want to see real answers over long history, set `ANTHROPIC_API_KEY` in the terminal and start the server with a live option.
 
 **Real answers to questions (recommended):**
 
@@ -377,6 +431,22 @@ python testenv.py serve --live-alerts      # needs DISCORD_WEBHOOK_URL in this t
 
 Run update now then posts the sample day's alerts to your channel, by the real rules. This is a good way to see the messages before your real ones arrive. **Use a webhook for a test channel**, because the messages contain the simulated sample prices and news. `update` and `finalize` from the command line still write to the outbox.
 
+**A real events calendar:**
+
+```bash
+python testenv.py serve --live-calendar     # needs ANTHROPIC_API_KEY and internet
+```
+
+The Calendar tab's **Update now** then reads real company calendars and news for your tickers and asks real Claude, saving into the **test** database. It costs a few cents per press. The real events land among the sample ones from today onwards, so you see real data in the calendar without touching your program's database. The daily `python testenv.py events` command stays simulated.
+
+**Real stock search:**
+
+```bash
+python testenv.py serve --live-search      # needs internet; free
+```
+
+The Stocks tab then searches Yahoo Finance and checks tickers with it, as your real app does. Stocks you add still go into the **test** watchlist, and their prices are simulated like the rest of the sample.
+
 **Real agent runs:**
 
 ```bash
@@ -396,7 +466,7 @@ Seed with yesterday as the end date first. If the sample already has a report fo
 pytest -v
 ```
 
-Expect `21 passed`. They use temporary databases, so they don't change your sample data.
+Expect `29 passed`. They use temporary databases and watchlists, so they don't change your sample data.
 
 | Test | Proves that |
 |---|---|
@@ -406,7 +476,7 @@ Expect `21 passed`. They use temporary databases, so they don't change your samp
 | `test_final_reports_are_permanent` | The real database protections apply to sample data too |
 | `test_flagged_tickers_follow_the_flagging_rule` | Every flagged ticker meets the real threshold (z-score of ±2, or 2× volume) |
 | `test_every_earnings_day_is_flagged_with_a_source` | Each ticker's earnings day is flagged, with a news source |
-| `test_briefs_follow_the_agent_template` | Every brief has the same sections as your agent's, and the sample-data notice |
+| `test_briefs_follow_the_agent_template` | Every brief has the same sections as your agent's (now including "Coming up"), and the sample-data notice |
 | `test_sample_reports_include_sector_and_market_context` | Every flagged move has a benchmark, verdict and sentence; all four kinds appear; earnings days read stock-specific, market-wide days market-wide, and sector-move days sector-wide; every brief has a market backdrop; the sample uses the real program's sector ETFs |
 | `test_same_settings_give_the_same_data` | Seeding is repeatable, and `--seed` changes it |
 | `test_app_serves_two_months_of_reports` | Your real API serves all 44 days, pages through the 43 earlier ones, and returns two months of ticker history |
@@ -415,10 +485,18 @@ Expect `21 passed`. They use temporary databases, so they don't change your samp
 | `test_offline_ask_answers_from_the_sample_data` | Offline answers list a ticker's flagged days, at $0 |
 | `test_charts_show_the_simulated_prices` | Charts get a full year of simulated prices for each range; a flagged day's close matches its report, and today's last point matches today's intraday move |
 | `test_search_over_two_months_of_sample_data` | Search finds every earnings day by keyword ("quarterly") and by meaning only ("profit"), nonsense finds nothing, and all 44 reports are indexed |
+| `test_offline_ask_and_briefs_know_whats_coming_up` | Offline Ask gives a ticker's next calendar event, cited as (calendar), and the latest brief's "Coming up" lists it |
 | `test_offline_ask_shows_the_passages_it_retrieved` | Offline Ask lists the passages retrieval found, including meaning-based ones |
-| `test_simulated_alerts_follow_the_real_rules` | `update` alerts the newly flagged ticker once, a second `update` doesn't repeat it, `finalize` sends one summary, and a skipped run sends nothing |
+| `test_simulated_alerts_follow_the_real_rules` | `update` alerts the newly flagged ticker once, a second `update` doesn't repeat it, `finalize` sends one summary (ending with the week ahead from the calendar), and a skipped run sends nothing |
 | `test_offline_mode_never_contacts_discord` | With `DISCORD_WEBHOOK_URL` set and any connection to Discord made to fail, Run now still "sends" its alert, to the outbox, and calls the market backdrop tool |
+| `test_calendar_has_two_months_of_history_and_whats_coming` | Every sample earnings day is on the calendar. All three kinds are upcoming, including an unconfirmed date. News events cite sample articles, previews are attached to earnings dates, and nothing is doubled despite weekly scans |
+| `test_offline_calendar_update_now` | The calendar's "today" is the sample's; **Update now** works offline at $0 without doubling anything; `events` (the daily update) works too |
 | `test_update_and_finalize_simulate_scheduled_runs` | `update` and `finalize` follow the real storage rules and keep the search index current |
+| `test_the_test_environment_has_its_own_watchlist` | Seeding writes `data/watchlist.txt` (first 3 main) and points your program's code at it; a new one copies your real list; an existing one is kept, unless `--tickers` replaces it |
+| `test_find_stocks_offline` | The offline search, through your real `watchlist.py`: Costco but not its Mexican listing, Apple but not its German one, no Bitcoin, and ETFs |
+| `test_add_star_and_remove_stocks_in_the_test_environment` | Through your real API: adding Costco as main (with its earnings date straight away), its figures after the next run, its chart, the real rules for crypto, unknown tickers and doubles, unstar and remove, and the next report leaving it out. **Your `market-agent/watchlist.txt` is unchanged** |
+| `test_reseeding_gives_added_stocks_history` | `status` lists added stocks; `reset` keeps the test watchlist; reseeding gives an added stock all 44 days |
+| `test_added_stocks_leave_the_rest_of_the_sample_unchanged` | Adding stocks doesn't change any existing stock's prices, news days or flags, or the calendar's events; the same stock always gets the same prices |
 | `test_refuses_to_use_the_main_projects_database` | Pointing it at a database inside `market-agent/` is refused |
 | `test_main_project_was_not_touched` | **Every file in `market-agent/` is unchanged** after all of the above. No `__pycache__` folders were created, and no search index or alerts outbox was written there |
 
@@ -437,6 +515,25 @@ Expect `21 passed`. They use temporary databases, so they don't change your samp
   - Phone width and dark mode worked, with no browser errors.
 
   The main project was unchanged afterwards.
+- **The calendar connections work in it.** In a browser over the sample, 7 checks passed with no browser errors:
+  - the Today tab's card and its links
+  - the brief's "Coming up"
+  - the new Ask example
+  - "Checking the events calendar" during a run
+  - phone width and dark mode
+
+  Every earlier browser check still passes too.
+- **The events calendar works in it.** In a browser over the sample, all 8 checks passed with no browser errors:
+  - the month view and a day's page
+  - an unconfirmed earnings date
+  - empty days, links to days and Back
+  - Update now with its progress and cooldown
+  - the keyboard
+  - phone width
+  - dark mode
+
+  The earlier Today, Previous days, chart, search and alerts checks also still pass.
+- **Tracked stocks work in it.** In a browser over the sample, 13 checks passed with no browser errors: the Today tab's main stocks and "N more" note, the Stocks tab's groups and counts, offline search (Costco yes, Bitcoin no), Track as main with its earnings date, "Also flagged" after unstarring, the new stock's figures after Run update now, its chart and calendar link, Remove with Keep, a hand edit showing up live, phone width and dark mode. Your real `watchlist.txt` was unchanged afterwards, and every earlier browser check still passes.
 - **Charts work in it.** The chart was driven in a browser over the sample data, covering markers, ranges, hover, keyboard, opening reports from markers, phone width and dark mode. Afterwards, the main project was again unchanged by the test environment.
 
 ---
@@ -450,7 +547,9 @@ Expect `21 passed`. They use temporary databases, so they don't change your samp
 | Change how reports are stored (`reports_db.py`) or split into passages (`search_index.py`) | `python testenv.py seed --reset`, so the sample database and search index are rebuilt |
 | Change the verdict rules or sentences (`describe_context` in `market_tools.py`) | `python testenv.py seed --reset`: verdicts are saved with each sample report |
 | Change `alerts.py` | Restart `serve`. To try alerts from scratch, `seed --reset` (the alert log lives in the sample database) |
-| Change your watchlist | `python testenv.py seed --reset` to simulate the new tickers |
+| Change `events.py` (for example its checks or how it saves) | `python testenv.py seed --reset`, so the calendar history is rebuilt with the new rules |
+| Change your real watchlist and want it here too | Delete `data/watchlist.txt`, then `python testenv.py seed --reset`. It copies your real list again |
+| Add stocks on the test Stocks tab and want them to have history | `python testenv.py seed --reset`. The test watchlist is kept |
 | Want "today" to match the real date | `python testenv.py seed --reset` |
 | Add a feature that needs new sample data | Extend `sample_market.py` (for example, more event types) and add a check to `test_testenv.py` |
 
@@ -477,6 +576,10 @@ Run `pytest -v` in **both** folders after changes: the main project's tests chec
 | Search says "By keywords" with `--live-embeddings` | `VOYAGE_API_KEY` isn't set in that terminal, or `voyageai` isn't installed. Without `--live-embeddings`, the stand-in is used and it says "By meaning and keywords". |
 | `no such column: move_read` from `status` | The sample data is from before sector context. Run `python testenv.py seed --reset`. |
 | No "simulated Discord" note after `update` | Nothing new to alert: those tickers were already alerted today, or nothing is flagged. See `python testenv.py alerts`, or `seed --reset` to start again. |
+| The Calendar tab says "Not updated yet" | The sample data is from before the calendar. Run `python testenv.py seed --reset`. |
+| The Stocks tab doesn't match your real `watchlist.txt` | By design: the test environment has its own copy. To copy yours again, delete `data/watchlist.txt` and run `python testenv.py seed --reset`. |
+| A stock you added stays at "first report next run" | Press **Run update now** or run `python testenv.py update`. If the latest day is already final, `python testenv.py seed --reset` gives it history instead. |
+| Search can't find a company | The offline search only knows its built-in list (`STOCK_UNIVERSE` in `sample_market.py`). Add it there, or use `serve --live-search`. |
 | `--live-alerts` sends nothing | `DISCORD_WEBHOOK_URL` isn't set in that terminal. The run log shows a warning if sending failed. |
 | Search results look rougher than expected | Without `--live-embeddings`, matching by meaning uses the simple topic stand-in. Use `--live-embeddings` to judge real quality. |
 | A test fails with `test_main_project_was_not_touched` | Something wrote into `market-agent/` during the tests. The assertion shows which files changed. Check that you're running the appendix version of `testenv.py`, which turns off `__pycache__` folders on its first lines. |
@@ -520,6 +623,7 @@ WARMUP_DAYS = 260  # simulated sessions before the window: z-score history, and 
 PROFILES = {
     "AAPL": (0.015, 190.0), "MSFT": (0.014, 410.0), "NVDA": (0.030, 120.0), "AMZN": (0.019, 180.0),
     "JPM": (0.013, 200.0), "GOOGL": (0.018, 165.0), "META": (0.024, 500.0), "TSLA": (0.035, 240.0),
+    "COST": (0.012, 900.0), "WMT": (0.011, 95.0), "KO": (0.009, 70.0), "NFLX": (0.024, 1100.0), "AMD": (0.032, 150.0),
 }
 DEFAULT_PROFILE = (0.020, 100.0)
 
@@ -530,9 +634,88 @@ SECTOR_NAMES = {
     "XLP": "Consumer Staples", "XLB": "Materials", "XLRE": "Real Estate",
 }
 SECTORS = {"AAPL": "XLK", "MSFT": "XLK", "NVDA": "XLK", "AMZN": "XLY", "TSLA": "XLY",
-           "JPM": "XLF", "GOOGL": "XLC", "META": "XLC"}  # anything else gets a sector picked from its name
+           "JPM": "XLF", "GOOGL": "XLC", "META": "XLC",
+           "COST": "XLP", "WMT": "XLP", "KO": "XLP", "PEP": "XLP", "DIS": "XLC", "NFLX": "XLC", "GOOG": "XLC",
+           "AMD": "XLK", "INTC": "XLK", "AVGO": "XLK", "ORCL": "XLK", "CRM": "XLK", "ADBE": "XLK",
+           "BRK-B": "XLF", "V": "XLF", "MA": "XLF", "BAC": "XLF", "XOM": "XLE", "UNH": "XLV",
+           "HD": "XLY", "NKE": "XLY", "SBUX": "XLY"}  # anything else gets a sector picked from its name
 
 PUBLISHERS = ["Sample Wire", "Demo Markets Daily", "Example Financial News"]  # fictional
+NAMES = {"AAPL": "Apple Inc.", "MSFT": "Microsoft Corporation", "NVDA": "NVIDIA Corporation", "AMZN": "Amazon.com, Inc.",
+         "JPM": "JPMorgan Chase & Co.", "GOOGL": "Alphabet Inc.", "META": "Meta Platforms, Inc.", "TSLA": "Tesla, Inc."}
+SHORT_NAMES = {"AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "Nvidia", "AMZN": "Amazon", "JPM": "JPMorgan",
+               "GOOGL": "Alphabet", "META": "Meta", "TSLA": "Tesla"}  # as headlines write them
+DIVIDEND_PAYERS = {"AAPL", "MSFT", "JPM", "GOOGL", "META", "COST", "WMT", "KO", "PEP"}
+
+# What Yahoo Finance's search knows in the test environment: (symbol, name, quoteType, exchange).
+# Prices for these are simulated like the rest. The last few can't be tracked (listed outside the
+# US, crypto, an index, a future, a mutual fund), so the Stocks tab's filtering can be tested too.
+STOCK_UNIVERSE = [
+    ("AAPL", "Apple Inc.", "EQUITY", "NASDAQ"), ("MSFT", "Microsoft Corporation", "EQUITY", "NASDAQ"),
+    ("NVDA", "NVIDIA Corporation", "EQUITY", "NASDAQ"), ("AMZN", "Amazon.com, Inc.", "EQUITY", "NASDAQ"),
+    ("JPM", "JPMorgan Chase & Co.", "EQUITY", "NYSE"), ("GOOGL", "Alphabet Inc.", "EQUITY", "NASDAQ"),
+    ("GOOG", "Alphabet Inc.", "EQUITY", "NASDAQ"), ("META", "Meta Platforms, Inc.", "EQUITY", "NASDAQ"),
+    ("TSLA", "Tesla, Inc.", "EQUITY", "NASDAQ"), ("COST", "Costco Wholesale Corporation", "EQUITY", "NASDAQ"),
+    ("WMT", "Walmart Inc.", "EQUITY", "NYSE"), ("KO", "The Coca-Cola Company", "EQUITY", "NYSE"),
+    ("PEP", "PepsiCo, Inc.", "EQUITY", "NASDAQ"), ("DIS", "The Walt Disney Company", "EQUITY", "NYSE"),
+    ("NFLX", "Netflix, Inc.", "EQUITY", "NASDAQ"), ("AMD", "Advanced Micro Devices, Inc.", "EQUITY", "NASDAQ"),
+    ("INTC", "Intel Corporation", "EQUITY", "NASDAQ"), ("AVGO", "Broadcom Inc.", "EQUITY", "NASDAQ"),
+    ("BRK-B", "Berkshire Hathaway Inc.", "EQUITY", "NYSE"), ("V", "Visa Inc.", "EQUITY", "NYSE"),
+    ("MA", "Mastercard Incorporated", "EQUITY", "NYSE"), ("BAC", "Bank of America Corporation", "EQUITY", "NYSE"),
+    ("XOM", "Exxon Mobil Corporation", "EQUITY", "NYSE"), ("UNH", "UnitedHealth Group Incorporated", "EQUITY", "NYSE"),
+    ("HD", "The Home Depot, Inc.", "EQUITY", "NYSE"), ("NKE", "NIKE, Inc.", "EQUITY", "NYSE"),
+    ("SBUX", "Starbucks Corporation", "EQUITY", "NASDAQ"), ("ORCL", "Oracle Corporation", "EQUITY", "NYSE"),
+    ("CRM", "Salesforce, Inc.", "EQUITY", "NYSE"), ("ADBE", "Adobe Inc.", "EQUITY", "NASDAQ"),
+    ("SPY", "SPDR S&P 500 ETF Trust", "ETF", "NYSEArca"), ("QQQ", "Invesco QQQ Trust, Series 1", "ETF", "NASDAQ"),
+    ("SMH", "VanEck Semiconductor ETF", "ETF", "NASDAQ"), ("VTI", "Vanguard Total Stock Market Index Fund ETF", "ETF", "NYSEArca"),
+    ("XLK", "Technology Select Sector SPDR Fund", "ETF", "NYSEArca"),
+    ("COST.MX", "Costco Wholesale Corporation", "EQUITY", "Mexico"), ("APC.DE", "Apple Inc.", "EQUITY", "XETRA"),
+    ("BTC-USD", "Bitcoin USD", "CRYPTOCURRENCY", "CCC"), ("^GSPC", "S&P 500", "INDEX", "SNP"),
+    ("ES=F", "E-Mini S&P 500 Dec 26", "FUTURE", "Chicago Mercantile Exchange"),
+    ("VFIAX", "Vanguard 500 Index Fund Admiral Shares", "MUTUALFUND", "Nasdaq"),
+]
+_UNIVERSE = {symbol: (name, kind, exchange) for symbol, name, kind, exchange in STOCK_UNIVERSE}
+
+
+def search_quotes(query: str, limit: int = 15) -> list[dict]:
+    """What yfinance's Search(...).quotes would return: ticker matches first, then name matches."""
+    q = " ".join(query.lower().split())
+    ranked = []
+    for order, (symbol, name, kind, exchange) in enumerate(STOCK_UNIVERSE):
+        sym, low = symbol.lower(), name.lower()
+        rank = (0 if sym == q else 1 if sym.startswith(q) else
+                2 if any(word.startswith(q) for word in low.replace(",", " ").split()) or q in low else None)
+        if rank is not None:
+            ranked.append((rank, order, {"symbol": symbol, "shortname": name, "longname": name, "quoteType": kind,
+                                         "typeDisp": kind.title(), "exchDisp": exchange}))
+    return [quote for _, _, quote in sorted(ranked, key=lambda r: r[:2])][:limit]
+
+
+def ticker_info(ticker: str) -> dict:
+    """What yfinance's Ticker(...).info would say: a name and type, or nearly nothing for an unknown ticker."""
+    if ticker in _UNIVERSE:
+        name, kind, _ = _UNIVERSE[ticker]
+        return {"quoteType": kind, "longName": name, "shortName": name}
+    if ticker in NAMES:
+        return {"quoteType": "EQUITY", "longName": NAMES[ticker], "shortName": NAMES[ticker]}
+    return {"trailingPegRatio": None}  # what Yahoo gives for a ticker it doesn't know
+
+
+def sector_of(ticker: str) -> str:
+    return SECTORS.get(ticker) or list(SECTOR_NAMES)[zlib.crc32(ticker.encode()) % len(SECTOR_NAMES)]
+# Dated events the sample news announces ahead of time (fictional), for the events calendar
+UPCOMING = [
+    ("product", "{name} to hold product launch event on {when}",
+     "{name} said it will unveil new products at an event on {when}."),
+    ("court", "Court sets {when} hearing in {name} patent case",
+     "A federal judge scheduled a hearing in the patent dispute for {when}."),
+    ("investor", "{name} plans investor day for {when}",
+     "{name} will present its long-term plans to investors on {when}."),
+    ("vote", "{name} shareholders to vote on proposal {when}",
+     "Shareholders will vote on the board's proposal at a special meeting on {when}."),
+    ("regulator", "Regulator to rule on {name} deal by {when}",
+     "A decision on the proposed acquisition is due on {when}, the regulator said."),
+]
 CATALYSTS = {
     ("earnings", 1): "Quarterly results beat expectations and guidance was raised.",
     ("earnings", -1): "Quarterly results missed expectations.",
@@ -626,7 +809,11 @@ def months_before(day: date, months: int) -> date:
 
 class SampleMarket:
     def __init__(self, tickers: list[str], end: date, months: int = 2, seed: int = 7):
-        self.tickers = list(dict.fromkeys(t.upper() for t in tickers))
+        self.tickers = list(dict.fromkeys(t.upper() for t in tickers))  # the stocks the sample was made with
+        self.watching = list(self.tickers)  # the stocks simulated runs report on (the test watchlist)
+        self.added = []                     # stocks tracked after the sample was made (see add_ticker)
+        self.seed = seed
+        self.end = end
         self.days = trading_days(months_before(end, months), end)  # the reporting window
         if not self.days:
             raise ValueError("no trading days in that range")
@@ -638,14 +825,16 @@ class SampleMarket:
         rng = np.random.default_rng(seed)
         srng = np.random.default_rng(seed + 1000)  # sector moves have their own stream, so adding them
         n, w = len(self.all_days), len(warmup)     # left the rest of the sample (e.g. earnings days) unchanged
-        self.sector = {t: SECTORS.get(t) or list(SECTOR_NAMES)[zlib.crc32(t.encode()) % len(SECTOR_NAMES)]
-                       for t in self.tickers}
+        self.warmup = w
+        self.sector = {t: sector_of(t) for t in self.tickers}
 
         market = rng.normal(0, 0.008, n)
         self.events = {}  # (ticker, day) -> (kind, direction)
+        self.macro_days = []
         for i in rng.choice(np.arange(w, n), size=max(1, len(self.days) // 20), replace=False):
             direction = int(rng.choice([-1, 1]))
             market[i] = direction * rng.uniform(0.025, 0.035)
+            self.macro_days.append((int(i), direction))
             for t in self.tickers:
                 self.events[(t, self.all_days[i])] = ("macro", direction)
 
@@ -660,35 +849,14 @@ class SampleMarket:
         self.etf_returns = {etf: market + move + srng.normal(0, 0.001, n) for etf, move in sector_moves.items()}
         self.etf_returns["SPY"] = market + srng.normal(0, 0.0005, n)
         sector_betas = {t: srng.uniform(0.8, 1.2) for t in self.tickers}
+        self.market_moves, self.sector_moves, self.sector_days = market, sector_moves, sector_days
 
         self.returns, self.volumes, self.closes = {}, {}, {}
         live_ticker = self.tickers[int(rng.integers(len(self.tickers)))]  # gives the latest day a story
         for t in self.tickers:
-            vol, start_price = PROFILES.get(t, DEFAULT_PROFILE)
-            beta = rng.uniform(0.7, 1.3)
-            r = rng.normal(0.0004, vol, n) + beta * market + sector_betas[t] * sector_moves[self.sector[t]]
-            v = rng.uniform(5e6, 6e7) * rng.lognormal(0, 0.2, n)
-            for i in range(w, n):
-                if (t, self.all_days[i]) in self.events:
-                    v[i] *= rng.uniform(1.6, 2.4)
-            earnings = int(rng.integers(w + 3, n))  # one earnings day per ticker in the window
-            direction = int(rng.choice([-1, 1], p=[0.35, 0.65]))
-            r[earnings] = direction * rng.uniform(3.2, 5.0) * vol
-            v[earnings] *= rng.uniform(2.6, 4.0)
-            self.events[(t, self.all_days[earnings])] = ("earnings", direction)
-            if t == live_ticker and (t, self.all_days[-1]) not in self.events:
-                live_strength = rng.uniform(2.6, 3.4)  # sized below, once the whole history is known
-                r[-1] = live_strength * vol
-                v[-1] *= rng.uniform(2.0, 2.8)
-                self.events[(t, self.all_days[-1])] = ("news", 1)
-            for i in range(w, n):
-                if i != earnings and (t, self.all_days[i]) not in self.events and rng.random() < 0.04:
-                    direction = int(rng.choice([-1, 1]))
-                    r[i] = direction * rng.uniform(2.3, 3.5) * vol
-                    v[i] *= rng.uniform(1.8, 3.0)
-                    self.events[(t, self.all_days[i])] = ("news", direction)
-            self.returns[t], self.volumes[t] = r, v
-            self.closes[t] = start_price * np.cumprod(1 + r)
+            strength = self._simulate(t, rng, sector_betas[t], live=t == live_ticker)
+            if strength is not None:
+                live_strength = strength
 
         # The latest day's story: a move of 2.6 to 3.4 standard deviations, so it's flagged all day
         if self.events.get((live_ticker, self.all_days[-1])) == ("news", 1):
@@ -702,6 +870,61 @@ class SampleMarket:
                 if self.sector[t] == etf and (t, self.all_days[i]) not in self.events:
                     self.volumes[t][i] *= srng.uniform(1.8, 2.6)
                     self.events[(t, self.all_days[i])] = ("sector", direction)
+
+    def _simulate(self, t: str, rng: np.random.Generator, sector_beta: float, live: bool = False) -> float | None:
+        """One stock's daily returns, volumes and news days. Returns the size of its latest-day story, if it has one."""
+        n, w = len(self.all_days), self.warmup
+        vol, start_price = PROFILES.get(t, DEFAULT_PROFILE)
+        beta = rng.uniform(0.7, 1.3)
+        r = rng.normal(0.0004, vol, n) + beta * self.market_moves + sector_beta * self.sector_moves[self.sector[t]]
+        v = rng.uniform(5e6, 6e7) * rng.lognormal(0, 0.2, n)
+        for i in range(w, n):
+            if (t, self.all_days[i]) in self.events:
+                v[i] *= rng.uniform(1.6, 2.4)
+        earnings = int(rng.integers(w + 3, n))  # one earnings day per ticker in the window
+        direction = int(rng.choice([-1, 1], p=[0.35, 0.65]))
+        r[earnings] = direction * rng.uniform(3.2, 5.0) * vol
+        v[earnings] *= rng.uniform(2.6, 4.0)
+        self.events[(t, self.all_days[earnings])] = ("earnings", direction)
+        live_strength = None
+        if live and (t, self.all_days[-1]) not in self.events:
+            live_strength = rng.uniform(2.6, 3.4)  # sized by the caller, once the whole history is known
+            r[-1] = live_strength * vol
+            v[-1] *= rng.uniform(2.0, 2.8)
+            self.events[(t, self.all_days[-1])] = ("news", 1)
+        for i in range(w, n):
+            if i != earnings and (t, self.all_days[i]) not in self.events and rng.random() < 0.04:
+                direction = int(rng.choice([-1, 1]))
+                r[i] = direction * rng.uniform(2.3, 3.5) * vol
+                v[i] *= rng.uniform(1.8, 3.0)
+                self.events[(t, self.all_days[i])] = ("news", direction)
+        self.returns[t], self.volumes[t] = r, v
+        self.closes[t] = start_price * np.cumprod(1 + r)
+        return live_strength
+
+    def add_ticker(self, ticker: str) -> None:
+        """Simulate a stock that was tracked after the sample was made (added on the Stocks tab).
+        It gets its own random stream, so every stock already in the sample stays exactly as it was.
+        Past reports don't include it, as in real use: it appears from the next simulated run."""
+        t = ticker.upper()
+        if t in self.returns:
+            return
+        rng = np.random.default_rng([self.seed, zlib.crc32(t.encode())])
+        self.sector[t] = sector_of(t)
+        for i, direction in self.macro_days:
+            self.events[(t, self.all_days[i])] = ("macro", direction)
+        self._simulate(t, rng, rng.uniform(0.8, 1.2))
+        for etf, i, direction in self.sector_days:
+            if self.sector[t] == etf and (t, self.all_days[i]) not in self.events:
+                self.volumes[t][i] *= rng.uniform(1.8, 2.6)
+                self.events[(t, self.all_days[i])] = ("sector", direction)
+        self.added.append(t)
+
+    def watch(self, tickers: list[str]) -> None:
+        """Report on these stocks from now on (the test watchlist), simulating any new ones."""
+        for t in tickers:
+            self.add_ticker(t)
+        self.watching = [t.upper() for t in tickers]
 
     # -- figures --------------------------------------------------------------
 
@@ -762,18 +985,20 @@ class SampleMarket:
     def scan(self, day: date, as_of: str | None = None, fraction: float = 1.0) -> dict:
         """The same shape as the real flag_events() result."""
         flagged, quiet = [], []
-        for t in self.tickers:
+        for t in self.watching:
             f = self.figures(t, day, fraction)
             if abs(f["return_zscore"]) >= 2 or f["volume_vs_avg"] >= 2:
                 f["context"] = self.context(t, day, fraction)
                 flagged.append(f)
             else:
-                quiet.append({"ticker": t, "return_1d_pct": f["return_1d_pct"]})
+                price = {k: f[k] for k in ("last_close", "last_price") if k in f}
+                quiet.append({"ticker": t, **price, "return_1d_pct": f["return_1d_pct"]})
         status = "complete" if fraction >= 1 else "in_progress"
         session = {"status": status, "as_of": as_of or day.isoformat()}
-        # "backdrop" isn't part of flag_events: it's what market_backdrop would say, for the brief
+        # "backdrop" and "coming_up" aren't part of flag_events: they're what market_backdrop and
+        # upcoming_events would say, for the brief
         return {"session": session, "flagged": flagged, "quiet": quiet, "errors": [],
-                "backdrop": self.backdrop(day, fraction)}
+                "backdrop": self.backdrop(day, fraction), "coming_up": self.coming_up(day)}
 
     # -- news and briefs --------------------------------------------------------
 
@@ -833,6 +1058,9 @@ class SampleMarket:
             lines += ["- **Worth watching:** whether the move holds into the next session.", ""]
         quiet = ", ".join(f"{q['ticker']} ({q['return_1d_pct']:+.2f}%)" for q in scan["quiet"])
         lines += ["## Quiet", "", quiet or "None.", ""]
+        lines += ["## Coming up", ""]
+        lines += [f"- {line}" for line in scan["coming_up"]] or ["Nothing on the calendar for the next week."]
+        lines.append("")
         return "\n".join(lines)
 
     def price_history(self, ticker: str, period: str) -> list[dict]:
@@ -841,6 +1069,97 @@ class SampleMarket:
         start = len(self.all_days) - sessions
         return [{"date": self.all_days[i].isoformat(), "close": round(float(self.closes[ticker][i]), 2),
                  "volume": int(self.volumes[ticker][i])} for i in range(start, len(self.all_days))]
+
+    # -- the events calendar ------------------------------------------------------
+
+    def company(self, ticker: str) -> str:
+        return NAMES.get(ticker) or (_UNIVERSE.get(ticker) or (None,))[0] or f"{ticker} Holdings Inc."
+
+    def _calendar_rng(self, ticker: str) -> np.random.Generator:
+        return np.random.default_rng(zlib.crc32(f"calendar{ticker}{self.days[0]}".encode()))
+
+    def calendar(self, ticker: str, as_of: date) -> dict:
+        """What yfinance's Ticker.calendar would say on a given day: the next earnings date
+        (quarterly, from the sample's earnings day) and, for dividend payers, the next ex-dividend date."""
+        rng = self._calendar_rng(ticker)
+        earnings_day = next(d for (t, d), (kind, _) in self.events.items() if t == ticker and kind == "earnings")
+        quarters = [earnings_day + timedelta(days=91 * k) for k in range(-1, 6)]
+        upcoming = [d for d in quarters if d >= as_of]
+        cal = {}
+        if upcoming:
+            nxt = upcoming[0]
+            # Like Yahoo: a window until the company confirms (here: unconfirmed until 3 weeks before)
+            cal["Earnings Date"] = [nxt] if (nxt - as_of).days <= 21 or rng.random() < 0.5 else [nxt, nxt + timedelta(days=5)]
+            eps = round(float(rng.uniform(0.8, 5.0)), 2)
+            cal.update({"Earnings Average": eps, "Earnings Low": round(eps * 0.92, 2), "Earnings High": round(eps * 1.07, 2)})
+        if ticker in DIVIDEND_PAYERS:
+            first = self.days[0] + timedelta(days=int(rng.integers(5, 60)))
+            ex_dates = [first + timedelta(days=91 * k) for k in range(-1, 6)]
+            ex = next(d for d in ex_dates if d >= as_of)
+            ex -= timedelta(days=max(0, ex.weekday() - 4))  # a weekday
+            if ex < as_of:
+                ex = next(d for d in ex_dates if d > ex + timedelta(days=7))
+            cal["Ex-Dividend Date"], cal["Dividend Date"] = ex, ex + timedelta(days=7)
+        return cal
+
+    def planned_events(self) -> list[dict]:
+        """About two news-announced events a week, from the start of the sample to two months past its end."""
+        rng = np.random.default_rng(zlib.crc32(f"planned{self.days[0]}{len(self.tickers)}".encode()))
+        days = trading_days(self.days[0], self.end + timedelta(days=60))
+        planned = []
+        for i in range(0, len(days), 3):
+            event_day = days[min(len(days) - 1, i + int(rng.integers(0, 3)))]
+            ticker = self.tickers[int(rng.integers(len(self.tickers)))]
+            kind, title, summary = UPCOMING[int(rng.integers(len(UPCOMING)))]
+            announced = event_day - timedelta(days=int(rng.integers(5, 21)))
+            name = SHORT_NAMES.get(ticker, ticker)
+            when = f"{event_day:%B} {event_day.day}"
+            planned.append({"ticker": ticker, "date": event_day, "announced": announced, "kind": kind,
+                            "headline": title.format(name=name, when=when), "summary": summary.format(name=name, when=when),
+                            "title": {"product": "Product launch event", "court": "Court hearing in patent case",
+                                      "investor": "Investor day", "vote": "Shareholder vote",
+                                      "regulator": "Regulator's decision on deal"}[kind]})
+        return planned
+
+    def coming_up(self, day: date) -> list[str]:
+        """What upcoming_events' this_week lines would say on a given day: the next 7 days of
+        earnings and ex-dividend dates, and news events announced by then."""
+        import events  # the real program's line format (the test environment puts it on the path)
+        soon = []
+        for t in self.watching:
+            company = events.short_name(self.company(t))
+            cal = self.calendar(t, day)
+            if cal.get("Earnings Date"):
+                window = len(cal["Earnings Date"]) > 1
+                soon.append((cal["Earnings Date"][0], t, company,
+                             "Earnings report (date not confirmed)" if window else "Earnings report"))
+            if cal.get("Ex-Dividend Date"):
+                soon.append((cal["Ex-Dividend Date"], t, company, "Ex-dividend date"))
+        soon += [(e["date"], e["ticker"], events.short_name(self.company(e["ticker"])), e["title"])
+                 for e in self.planned_events() if e["announced"] <= day and e["ticker"] in self.watching]
+        soon = sorted(item for item in soon if day <= item[0] <= day + timedelta(days=7))
+        return [events.event_line({"event_date": d.isoformat(), "ticker": t, "company": c, "title": title})
+                for d, t, c, title in soon]
+
+    def event_articles(self, ticker: str, as_of: date) -> list[dict]:
+        """What get_news would return on a given day: announcements of upcoming events (made in the
+        last two weeks), a preview of upcoming earnings, and the past week's catalyst headlines."""
+        articles = []
+        for e in self.planned_events():
+            if e["ticker"] == ticker and e["announced"] <= as_of < e["date"] and (as_of - e["announced"]).days <= 21:
+                articles.append({"title": f"{ticker}: {e['headline']}", "publisher": PUBLISHERS[e["date"].day % 3],
+                                 "published": f"{e['announced']}T13:30:00Z", "summary": e["summary"],
+                                 "url": f"https://news.example.com/{e['announced']}/{ticker.lower()}-{e['kind']}-{e['date']}"})
+        earnings = self.calendar(ticker, as_of).get("Earnings Date")
+        if earnings and (earnings[0] - as_of).days <= 14:
+            articles.append({"title": f"{ticker}: what to expect from quarterly results", "publisher": PUBLISHERS[0],
+                             "published": f"{as_of}T12:00:00Z",
+                             "summary": "Analysts will watch guidance and margins when the company reports.",
+                             "url": f"https://news.example.com/{as_of}/{ticker.lower()}-earnings-preview"})
+        recent = [d for d in self.days if as_of - timedelta(days=7) <= d <= as_of]
+        for d in recent:
+            articles += self.news(ticker, d)
+        return articles[:10]
 
     def sources(self, scan: dict, day: date) -> list[dict]:
         return [{**item, "ticker": m["ticker"]} for m in scan["flagged"] for item in self.news(m["ticker"], day)]
@@ -862,13 +1181,24 @@ folder next to market-agent/ and never writes anything into that folder.
     python testenv.py update            simulate a scheduled intraday run (another program saving)
     python testenv.py finalize          simulate the run that writes the latest day's final report
     python testenv.py alerts            show the Discord alerts the simulated runs "sent"
-    python testenv.py reset             delete the sample data
+    python testenv.py events            simulate the daily events-calendar update at the market open
+    python testenv.py reset             delete the sample data (your test watchlist is kept)
 
 Search (RAG) works offline too: a simulated stand-in for Voyage AI ranks passages by
 topic. Use `serve --live-embeddings` to try real Voyage embeddings on the sample data.
 
 Discord alerts follow the real rules but are written to data/alerts_outbox.jsonl instead
 of being sent, even if DISCORD_WEBHOOK_URL is set. Use `serve --live-alerts` to really send.
+
+The events calendar is filled from simulated company calendars and sample news, read by a
+stand-in for Claude, and checked and saved by your real events.py. `serve --live-calendar`
+uses real Yahoo Finance and Claude instead.
+
+The test environment has its own watchlist, data/watchlist.txt, copied from the main project's
+when you first seed. Finding, adding, starring and removing stocks on the Stocks tab edit that
+copy, never the real one. Search finds stocks from a built-in list (no internet);
+`serve --live-search` uses Yahoo Finance's real search. A stock you add is simulated from the
+next run on, like real use; `seed --reset` gives it two months of history too.
 """
 
 import argparse
@@ -897,7 +1227,7 @@ PORT = 8100
 ET = ZoneInfo("America/New_York")
 DEFAULT_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "JPM"]
 
-from sample_market import SampleMarket, trading_days  # noqa: E402  (after the bytecode setting)
+from sample_market import SampleMarket, search_quotes, ticker_info, trading_days  # noqa: E402  (after the bytecode setting)
 
 
 # ---------------------------------------------------------------------------
@@ -922,7 +1252,14 @@ def connect_main(db_path: Path = DB_PATH):
         sys.path.insert(0, str(MAIN))
     import reports_db
     reports_db.DB_PATH = db_path  # also covers the case where it was imported earlier
+    import market_tools
+    market_tools.WATCHLIST_FILE = watchlist_path(db_path)  # the test watchlist: the Stocks tab never edits the real one
     return reports_db
+
+
+def watchlist_path(db_path: Path = DB_PATH) -> Path:
+    """The test environment's own watchlist.txt, next to its database."""
+    return Path(db_path).resolve().with_name("watchlist.txt")
 
 
 def config_path(db_path: Path) -> Path:
@@ -934,7 +1271,20 @@ def load_market(db_path: Path = DB_PATH) -> SampleMarket:
     if not path.is_file():
         sys.exit("No sample data yet. Run: python testenv.py seed")
     config = json.loads(path.read_text())
-    return SampleMarket(config["tickers"], date.fromisoformat(config["end"]), config["months"], config["seed"])
+    if not watchlist_path(db_path).is_file():  # sample data made before the test environment had its own
+        make_test_watchlist(db_path, config["tickers"])
+    market = SampleMarket(config["tickers"], date.fromisoformat(config["end"]), config["months"], config["seed"])
+    follow_watchlist(market, db_path)
+    return market
+
+
+def follow_watchlist(market: SampleMarket, db_path: Path = DB_PATH) -> SampleMarket:
+    """Simulate the stocks on the test watchlist right now: added ones join, removed ones leave.
+    The stocks already in the sample keep exactly the same data."""
+    path = watchlist_path(db_path)
+    tickers = read_tickers(path) if path.is_file() else []
+    market.watch(tickers or market.tickers)
+    return market
 
 
 SIMULATED_TOPICS = {
@@ -972,6 +1322,75 @@ def install_fake_embeddings(search_index) -> None:
     search_index.EMBED_MODEL = "simulated"  # real Voyage vectors replace these automatically
 
 
+def install_fake_events(events, market, delay: float = 0.0) -> None:
+    """The events calendar over the sample: simulated company calendars and news, and a free stand-in
+    for Claude that reports the sample's planned events. Your real events.py still checks every one
+    (watchlist ticker, a real article, a date in range) and saves them by its normal rules.
+    delay slows each step a little, so "Update now" shows its progress like a real update."""
+    import re
+    import time as clock_time
+    clock = {"today": market.end}  # the sample's "today"; seeding moves it back to fill in history
+
+    def fake_news(ticker):
+        clock_time.sleep(delay)
+        market.add_ticker(ticker)  # a stock added on the Stocks tab (nothing changes for the others)
+        return market.event_articles(ticker, clock["today"])
+
+    def fake_calendar(ticker):
+        market.add_ticker(ticker)
+        return market.calendar(ticker, clock["today"])
+
+    def fake_claude(prompt):
+        clock_time.sleep(delay * 3)
+        numbers = {title: int(n) for n, title in re.findall(r"^\[(\d+)\] .*\n    (.*)$", prompt, re.M)}
+        known = re.findall(r"^- id (\d+): (\S+) (\w+) on (\S+): (.*)$", prompt, re.M)
+        found = []
+        for e in market.planned_events():
+            n = numbers.get(f"{e['ticker']}: {e['headline']}")
+            if n:
+                same = next((int(i) for i, t, kind, _, title in known
+                             if t == e["ticker"] and kind == "news" and title == e["title"]), None)
+                found.append({"ticker": e["ticker"], "date": e["date"].isoformat(), "title": e["title"],
+                              "details": e["summary"], "sources": [n], "same_as": same})
+        for title, n in numbers.items():  # an earnings preview: attached to the earnings date
+            ticker = title.split(":")[0]
+            if title.endswith("what to expect from quarterly results"):
+                same = next((int(i) for i, t, kind, *_ in known if t == ticker and kind == "earnings"), None)
+                if same:
+                    found.append({"ticker": ticker, "date": None, "title": "Earnings preview", "same_as": same,
+                                  "details": "Analysts will watch guidance and margins.", "sources": [n]})
+        return json.dumps({"events": found}), 0.0
+
+    events.today_et = lambda: clock["today"]
+    events.company_name = lambda ticker: events.short_name(market.company(ticker))
+    events.fetch_calendar = fake_calendar
+    events.fetch_news = fake_news
+    events.ask_claude = fake_claude
+    events.sample_clock = clock
+
+
+def simulate_events_scan(db_path: Path = DB_PATH, as_of: date | None = None) -> str:
+    """What the daily scan at the market open does, over the sample."""
+    connect_main(db_path)
+    market = load_market(db_path)
+    import events
+    install_fake_events(events, market)
+    events.sample_clock["today"] = as_of or market.end
+    try:
+        result = events.scan("scheduled")
+    finally:
+        events.sample_clock["today"] = market.end
+    return (f"{result['status']}: calendar updated as of {as_of or market.end}, "
+            f"{result['events_found']} news events from {result['articles']} headlines")
+
+
+def seed_events(db_path: Path, market) -> None:
+    """Fill the calendar as daily use would have: a scan each Monday of the sample, then today."""
+    mondays = [d for d in market.days if d.weekday() == 0]
+    for day in [*mondays, market.end]:
+        simulate_events_scan(db_path, day)
+
+
 def update_search_index(db_path: Path = DB_PATH, live: bool = False) -> dict:
     """Index the sample reports for search (simulated embeddings unless live)."""
     connect_main(db_path)
@@ -981,16 +1400,56 @@ def update_search_index(db_path: Path = DB_PATH, live: bool = False) -> dict:
     return search_index.sync()
 
 
+def read_tickers(path: Path) -> list[str]:
+    """The tickers in a watchlist.txt. A line can name a benchmark after the ticker, a * marks
+    a main stock, and anything after # is a comment."""
+    words = [line.split("#", 1)[0].replace("*", " ").split() for line in path.read_text().splitlines()]
+    return [w[0].upper() for w in words if w]
+
+
 def main_watchlist() -> list[str]:
-    """The tickers in the main project's watchlist.txt (only read), or a default set.
-    A line can name a benchmark after the ticker, and anything after # is a comment."""
+    """The tickers in the main project's watchlist.txt (only read), or a default set."""
     path = MAIN / "watchlist.txt"
     if path.is_file():
-        words = [line.split("#", 1)[0].split() for line in path.read_text().splitlines()]
-        tickers = [w[0].upper() for w in words if w]
+        tickers = read_tickers(path)
         if tickers:
             return tickers
     return DEFAULT_TICKERS
+
+
+TEST_MAIN_STOCKS = 3  # main stocks in a new test watchlist, so the Today tab shows "N more" too
+
+
+def make_test_watchlist(db_path: Path = DB_PATH, tickers: list[str] | None = None) -> list[str]:
+    """The test environment's own watchlist.txt, which the Stocks tab edits. Kept as it is if it
+    already exists (so stocks you added get history when you reseed), unless tickers are given.
+    A new one is a copy of the main project's (only read), with the first 3 as main stocks
+    if it doesn't star any. Returns its tickers."""
+    path = watchlist_path(db_path)
+    if path.parent == MAIN or MAIN in path.parents:
+        sys.exit(f"Refusing to write a watchlist inside the main project: {path}")
+    if path.is_file() and not tickers and read_tickers(path):
+        return read_tickers(path)
+    real = MAIN / "watchlist.txt"
+    if tickers:
+        lines = [t.strip().upper() for t in tickers if t.strip()]
+    elif real.is_file() and read_tickers(real):
+        lines = real.read_text().splitlines()  # benchmarks and comments come along
+    else:
+        lines = list(DEFAULT_TICKERS)
+    if not any("*" in line.split("#", 1)[0] for line in lines):
+        starred = 0
+        for i, line in enumerate(lines):
+            code = line.split("#", 1)[0]
+            if code.strip() and starred < TEST_MAIN_STOCKS:
+                lines[i] = line.replace(code.strip(), "*" + code.strip(), 1)
+                starred += 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = "# The test environment's watchlist (the Stocks tab edits this copy, never the real one)"
+    if not lines or lines[0] != header:
+        lines.insert(0, header)
+    path.write_text("\n".join(lines) + "\n")
+    return read_tickers(path)
 
 
 # ---------------------------------------------------------------------------
@@ -1072,7 +1531,7 @@ def seed_database(db_path: Path = DB_PATH, end: date | None = None, months: int 
     if db_path.exists():
         sys.exit(f"Sample data already exists at {db_path}. Use --reset to replace it.")
     end = end or datetime.now(ET).date()
-    tickers = tickers or main_watchlist()
+    tickers = make_test_watchlist(db_path, tickers)
     market = SampleMarket(tickers, end, months, seed)
     latest_day = market.days[-1]
     latest = latest or ("intraday" if latest_day == end else "final")
@@ -1103,6 +1562,7 @@ def seed_database(db_path: Path = DB_PATH, end: date | None = None, months: int 
                 finalized = datetime.combine(next_day[day], time(8, 16), ET)
             _save(reports_db, conn, market, day, market.scan(day), "final", finalized, rng.uniform(0.03, 0.06))
     update_search_index(db_path)
+    seed_events(db_path, market)
     return status_summary(db_path)
 
 
@@ -1125,15 +1585,27 @@ def status_summary(db_path: Path = DB_PATH) -> dict:
     import alerts
     import search_index
     index = search_index.status()
+    import events
     with closing(reports_db.connect(db_path, readonly=True)) as conn:
         logged = len(alerts.recent(conn, 10_000))
+        on_calendar = events.events_between(conn, "2000-01-01", "2100-01-01")
+        scans = conn.execute("SELECT COUNT(*) FROM event_scans").fetchone()[0] if on_calendar else 0
+    upcoming = [e for e in on_calendar if e["event_date"] >= market.end.isoformat()]
+    import watchlist
+    tracked = watchlist.entries()
     return {"database": str(Path(db_path).resolve()), "main_project": str(MAIN), "days": row["days"],
             "first_day": row["first"], "last_day": row["last"], "final": row["final"],
             "intraday": intraday, "flagged_rows": flagged, "simulated_cost_usd": row["cost"],
             "earnings_days": {t: d for d, t in earnings}, "sector_move_days": sector_days,
             "kinds_of_move": reads,
             "search_index": {"reports": index["reports_indexed"], "passages": index["passages"]},
-            "alerts": {"logged": logged, "outbox_messages": len(read_outbox(db_path))}}
+            "alerts": {"logged": logged, "outbox_messages": len(read_outbox(db_path))},
+            "calendar": {"upcoming": len(upcoming), "past": len(on_calendar) - len(upcoming), "scans": scans,
+                         "next": [f"{e['event_date']} {e['company']}: {e['title']}" for e in upcoming[:4]]},
+            "watchlist": {"file": str(watchlist_path(db_path)), "tracked": len(tracked),
+                          "main": [e["ticker"] for e in tracked if e["main"]],
+                          "added_since_seeding": market.added,
+                          "removed_since_seeding": [t for t in market.tickers if t not in market.watching]}}
 
 
 # ---------------------------------------------------------------------------
@@ -1185,6 +1657,7 @@ def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) ->
     plan = {}
 
     def fake_market_session():
+        follow_watchlist(market, db_path)  # like a real run, report on the watchlist as it is now
         point = next_intraday_point(reports_db, market, db_path)
         if point is None:
             return {"status": "complete", "as_of": market.days[-1].isoformat()}
@@ -1203,6 +1676,10 @@ def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) ->
                                model="offline-test")
         await asyncio.sleep(0.3)
         yield UserMessage(content=[ToolResultBlock(tool_use_id="backdrop", content=text({"summary": scan["backdrop"]}))])
+        yield AssistantMessage(content=[ToolUseBlock(id="calendar", name="mcp__market__upcoming_events", input={})],
+                               model="offline-test")
+        await asyncio.sleep(0.2)
+        yield UserMessage(content=[ToolResultBlock(tool_use_id="calendar", content=text({"this_week": scan["coming_up"]}))])
         for i, m in enumerate(scan["flagged"]):
             yield AssistantMessage(content=[ToolUseBlock(id=f"news{i}", name="mcp__market__get_news",
                                                          input={"ticker": m["ticker"]})], model="offline-test")
@@ -1230,11 +1707,19 @@ def offline_answer(reports_db, ask, question: str, db_path: Path = DB_PATH) -> s
                 lines.append(f"- **{t}** was flagged on {len(rows)} day{'s' if len(rows) != 1 else ''}. Most recent: {recent}.")
             else:
                 lines.append(f"- **{t}** hasn't been flagged in the saved reports.")
+            import events
+            ahead = events.upcoming(conn, events.today_et(), ask.CALENDAR_DAYS, [t])
+            if ahead:
+                lines.append(f"  Next on the calendar: {events.event_line(ahead[0], company=False)} (calendar).")
         if not tickers:
             top = conn.execute("""SELECT ticker, COUNT(*) FROM report_tickers WHERE category = 'flagged'
                                   GROUP BY ticker ORDER BY COUNT(*) DESC, ticker LIMIT 3""").fetchall()
             lines.append("Most-flagged tickers in the saved reports: "
                          + (", ".join(f"**{t}** ({n} days)" for t, n in top) or "none yet") + ".")
+            import events
+            ahead = events.upcoming(conn, events.today_et(), 7)
+            if ahead:
+                lines += ["", "Next on the calendar (calendar):"] + [f"- {events.event_line(e)}" for e in ahead[:3]]
     # The retrieval step real answers are built on: the passages that best match the question
     passages = ask.find_passages(question)[:3]
     if passages:
@@ -1246,8 +1731,9 @@ def offline_answer(reports_db, ask, question: str, db_path: Path = DB_PATH) -> s
 def install_fake_prices(prices, reports_db, market, db_path: Path = DB_PATH) -> None:
     """Make the charts show the simulated market instead of downloading prices."""
     def fake_fetch(ticker, period):
-        if ticker not in market.tickers:
-            return []
+        if ticker not in market.returns:
+            if ticker not in follow_watchlist(market, db_path).watching:
+                return []  # like Yahoo for a ticker it doesn't know
         rows = market.price_history(ticker, period)
         # While the latest sample day is still intraday, end the chart at the price its report shows
         with closing(reports_db.connect(db_path, readonly=True)) as conn:
@@ -1262,6 +1748,21 @@ def install_fake_prices(prices, reports_db, market, db_path: Path = DB_PATH) -> 
     prices.fetch_prices = fake_fetch
     prices.CACHE_SECONDS = 0  # so charts follow `update` and `finalize` straight away
     prices._cache.clear()
+
+
+def install_fake_search(watchlist) -> None:
+    """Finding stocks without the internet: the real watchlist.py (its filtering, checks and
+    limits) over a built-in list of stocks and ETFs, instead of Yahoo Finance's search."""
+    class FakeSearch:
+        def __init__(self, query, max_results=15, **_):
+            self.quotes = search_quotes(query, max_results)
+
+    class FakeTicker:
+        def __init__(self, ticker):
+            self.info = ticker_info(ticker.upper())
+
+    watchlist.yf = type("OfflineYahoo", (), {"Search": FakeSearch, "Ticker": FakeTicker})
+    watchlist._search_cache.clear()
 
 
 def install_fake_ask(ask, reports_db, db_path: Path = DB_PATH) -> None:
@@ -1285,19 +1786,27 @@ def install_fake_ask(ask, reports_db, db_path: Path = DB_PATH) -> None:
 # ---------------------------------------------------------------------------
 
 def make_app(db_path: Path = DB_PATH, live_ask: bool = False, live_runs: bool = False,
-             live_embeddings: bool = False, live_alerts: bool = False, frontend_dist: Path = FRONTEND_DIST):
+             live_embeddings: bool = False, live_alerts: bool = False, live_calendar: bool = False,
+             live_search: bool = False, frontend_dist: Path = FRONTEND_DIST):
     reports_db = connect_main(db_path)
     market = load_market(db_path)
     import alerts
     import api
     import ask
+    import events
     import prices
     import run_brief
     import search_index
+    import watchlist
+    if not live_search:
+        install_fake_search(watchlist)
     if not live_embeddings:
         install_fake_embeddings(search_index)
     if not live_alerts:
         install_fake_alerts(alerts, db_path)
+    if not live_calendar:
+        install_fake_events(events, market, delay=0.3)
+    api.CALENDAR_SCAN_COOLDOWN_SECONDS = int(os.environ.get("CALENDAR_SCAN_COOLDOWN_SECONDS", "15"))
     api.RUN_COOLDOWN_SECONDS = int(os.environ.get("RUN_COOLDOWN_SECONDS", "15"))  # shorter for testing
     if not live_runs:  # live runs use real market data, so the charts do too
         install_fake_runs(run_brief, reports_db, market, db_path)
@@ -1328,7 +1837,7 @@ def reset(db_path: Path = DB_PATH) -> None:
             (folder / (base + suffix)).unlink(missing_ok=True)
     (folder / "sample_config.json").unlink(missing_ok=True)
     outbox_path(db_path).unlink(missing_ok=True)
-    print(f"Deleted the sample data in {folder}")
+    print(f"Deleted the sample data in {folder} (kept your test watchlist, {watchlist_path(db_path).name})")
 
 
 def main() -> None:
@@ -1338,7 +1847,7 @@ def main() -> None:
     seed.add_argument("--end", type=date.fromisoformat, help="last day of the sample (default: today)")
     seed.add_argument("--months", type=int, default=2, help="how far back the sample goes (default: 2)")
     seed.add_argument("--seed", type=int, default=7, help="change for different (but repeatable) sample data")
-    seed.add_argument("--tickers", help="comma-separated (default: the main project's watchlist)")
+    seed.add_argument("--tickers", help="comma-separated; replaces the test watchlist (default: keep it, or copy the main project's)")
     seed.add_argument("--latest", choices=["intraday", "final"], help="status of the latest day")
     seed.add_argument("--reset", action="store_true", help="replace existing sample data")
     commands.add_parser("status", help="summary of the sample data")
@@ -1352,8 +1861,13 @@ def main() -> None:
                        help="search by meaning with real Voyage AI embeddings (needs VOYAGE_API_KEY)")
     serve.add_argument("--live-alerts", action="store_true",
                        help="Run now sends real Discord alerts about the sample data (needs DISCORD_WEBHOOK_URL)")
+    serve.add_argument("--live-calendar", action="store_true",
+                       help="the calendar's Update now uses real Yahoo Finance and Claude (costs money; saves into the test database)")
+    serve.add_argument("--live-search", action="store_true",
+                       help="find stocks with Yahoo Finance's real search (free; still edits only the test watchlist)")
     commands.add_parser("update", help="simulate a scheduled intraday run")
     commands.add_parser("finalize", help="simulate the run that writes the latest day's final report")
+    commands.add_parser("events", help="simulate the daily events-calendar update")
     outbox = commands.add_parser("alerts", help="show the simulated Discord alerts")
     outbox.add_argument("--clear", action="store_true", help="empty the outbox (the alert log is kept)")
     commands.add_parser("reset", help="delete the sample data")
@@ -1376,9 +1890,10 @@ def main() -> None:
         if not DB_PATH.exists():
             sys.exit("No sample data yet. Run: python testenv.py seed")
         app = make_app(live_ask=args.live_ask, live_runs=args.live_runs, live_embeddings=args.live_embeddings,
-                       live_alerts=args.live_alerts)
-        live = [name for name, on in (("Claude", args.live_ask or args.live_runs), ("Voyage", args.live_embeddings),
-                                      ("Discord", args.live_alerts)) if on]
+                       live_alerts=args.live_alerts, live_calendar=args.live_calendar, live_search=args.live_search)
+        live = [name for name, on in (("Claude", args.live_ask or args.live_runs or args.live_calendar),
+                                      ("Voyage", args.live_embeddings), ("Discord", args.live_alerts),
+                                      ("Yahoo search", args.live_search)) if on]
         mode = f"LIVE {' + '.join(live)}" if live else "offline (no Claude, no Voyage, no Discord, no cost)"
         print(f"Test environment: http://localhost:{args.port}  ·  {mode}  ·  database {DB_PATH}")
         if not FRONTEND_DIST.is_dir():
@@ -1388,6 +1903,8 @@ def main() -> None:
         print(simulate_update())
     elif args.command == "finalize":
         print(simulate_finalize())
+    elif args.command == "events":
+        print(simulate_events_scan())
     elif args.command == "alerts":
         if args.clear:
             outbox_path().unlink(missing_ok=True)
@@ -1562,7 +2079,7 @@ def test_briefs_follow_the_agent_template(conn):
     for body, status in conn.execute("SELECT body_md, status FROM reports"):
         title = "# Intraday update: " if status == "intraday" else "# Watchlist brief: "
         assert body.startswith(title)
-        assert "## Notable moves" in body and "## Quiet" in body
+        assert "## Notable moves" in body and "## Quiet" in body and "## Coming up" in body
         assert "Sample data for the test environment" in body
 
 
@@ -1686,6 +2203,15 @@ def test_search_over_two_months_of_sample_data(db, client, conn):
     assert status["reports_indexed"] == status["reports_total"] == 44
 
 
+def test_offline_ask_and_briefs_know_whats_coming_up(db, client, conn):
+    response = client(db).post("/api/ask", json={"question": "What's next for MSFT?"})
+    done = [line for line in response.text.splitlines() if '"done"' in line][0]
+    assert "Next on the calendar: Mon Nov 9: Court hearing in patent case (calendar)" in done
+
+    latest = conn.execute("SELECT body_md FROM reports WHERE session_date = '2026-11-06'").fetchone()[0]
+    assert "## Coming up\n\n- Mon Nov 9: Microsoft (MSFT): Court hearing in patent case" in latest
+
+
 def test_offline_ask_shows_the_passages_it_retrieved(db, client):
     response = client(db).post("/api/ask", json={"question": "Which companies reported profits?"})
     done = [line for line in response.text.splitlines() if '"done"' in line][0]
@@ -1705,6 +2231,8 @@ def test_simulated_alerts_follow_the_real_rules(fresh_db):
     assert [m["content"].split("**")[1] for m in outbox] == ["1 new flag", "Daily summary:"]
     assert outbox[0]["embeds"][0]["title"].endswith("so far today")
     assert "**Vs. sector and market:**" in outbox[0]["embeds"][0]["description"]
+    assert ("**Coming up:**\n• Mon Nov 9: Microsoft (MSFT): Court hearing in patent case"
+            in outbox[1]["embeds"][0]["description"])  # the summary lists the week ahead, from the calendar
     assert testenv.status_summary(fresh_db)["alerts"] == {"logged": 2, "outbox_messages": 2}
 
 
@@ -1728,6 +2256,45 @@ def test_offline_mode_never_contacts_discord(fresh_db, client, monkeypatch):
     assert len(testenv.read_outbox(fresh_db)) == 1
 
 
+def test_calendar_has_two_months_of_history_and_whats_coming(conn):
+    import events
+    on_calendar = events.events_between(conn, "2000-01-01", "2100-01-01")
+    by_kind = {kind: [e for e in on_calendar if e["kind"] == kind] for kind in ("earnings", "dividend", "news")}
+
+    # Every sample earnings day in the window was on the calendar, and stays there afterwards
+    earnings_days = {(t, d.isoformat()) for (t, d), (kind, _) in SampleMarket(TICKERS, END).events.items()
+                     if kind == "earnings" and d >= date(2026, 9, 14)}  # from the first weekly scan on
+    assert earnings_days <= {(e["ticker"], e["event_date"]) for e in by_kind["earnings"]}
+    upcoming = [e for e in on_calendar if e["event_date"] >= END.isoformat()]
+    assert {e["kind"] for e in upcoming} == {"earnings", "dividend", "news"}
+    assert any(e["date_note"] and e["date_note"].startswith("Estimated") for e in upcoming)  # an unconfirmed date
+    # News events always cite a sample article, and earnings previews are attached to the earnings date
+    assert all(e["sources"] and e["sources"][0]["url"].startswith("https://news.example.com/") for e in by_kind["news"])
+    assert any(e["news_note"] for e in by_kind["earnings"])
+    # No event appears twice, despite a scan every week
+    keys = [(e["ticker"], e["event_date"], e["kind"], e["title"]) for e in on_calendar]
+    assert len(keys) == len(set(keys))
+    assert {e["company"] for e in on_calendar} <= {"Apple", "Microsoft", "NVIDIA", "Amazon.com", "JPMorgan Chase"}
+
+
+def test_offline_calendar_update_now(fresh_db, client):
+    app = client(fresh_db)
+    before = app.get("/api/calendar").json()
+    assert before["today"] == "2026-11-06" and before["last_scan"]["trigger"] == "scheduled"
+
+    assert app.post("/api/calendar/scan", json={}).status_code == 202
+    for _ in range(100):
+        scan = app.get("/api/calendar/scan").json()["scan"]
+        if scan["state"] != "running":
+            break
+        time.sleep(0.05)
+    after = app.get("/api/calendar").json()
+
+    assert scan["state"] == "finished" and scan["result"]["cost_usd"] == 0 and scan["result"]["trigger"] == "manual"
+    assert len(after["events"]) == len(before["events"])  # nothing new since this morning, and nothing doubled
+    assert testenv.simulate_events_scan(fresh_db).startswith("ok: calendar updated as of 2026-11-06")
+
+
 def test_update_and_finalize_simulate_scheduled_runs(fresh_db):
     assert testenv.simulate_update(fresh_db).startswith("updated")
     assert testenv.simulate_finalize(fresh_db).startswith("finalized")
@@ -1735,6 +2302,123 @@ def test_update_and_finalize_simulate_scheduled_runs(fresh_db):
     import search_index
     assert search_index.status()["reports_indexed"] == 44  # search kept up with both
     assert (fresh_db.parent / "search.db").exists()
+
+
+# ---------------------------------------------------------------------------
+# Tracked stocks: the Stocks tab, over the test environment's own watchlist
+# ---------------------------------------------------------------------------
+
+def wait_for(check, tries=100):
+    for _ in range(tries):
+        if check():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_the_test_environment_has_its_own_watchlist(tmp_path):
+    db = seed(tmp_path)
+    path = testenv.watchlist_path(db)
+    assert path == tmp_path / "watchlist.txt"
+    lines = path.read_text().splitlines()
+    assert lines[0].startswith("# The test environment's watchlist")
+    assert lines[1:] == ["*AAPL", "*MSFT", "*NVDA", "AMZN", "JPM"]  # the first 3 are main stocks
+    import market_tools
+    assert market_tools.WATCHLIST_FILE == path  # what every main-project module reads
+
+    # A new test watchlist copies the main project's (only reading it)
+    other = tmp_path / "other" / "reports.db"
+    assert testenv.make_test_watchlist(other) == testenv.main_watchlist()
+    # An existing one is kept, so stocks you added survive `seed --reset`
+    testenv.watchlist_path(other).write_text("*COST\nAAPL\n")
+    assert testenv.make_test_watchlist(other) == ["COST", "AAPL"]
+    assert testenv.make_test_watchlist(other, ["KO"]) == ["KO"]  # unless --tickers replaces it
+
+
+def test_find_stocks_offline(db, client):
+    app = client(db)
+    found = app.get("/api/stocks/search?q=costco").json()["results"]
+    assert [(r["ticker"], r["type"], r["tracked"]) for r in found] == [("COST", "Stock", False)]  # not COST.MX
+    assert [r["ticker"] for r in app.get("/api/stocks/search?q=apple").json()["results"]] == ["AAPL"]  # not APC.DE
+    assert app.get("/api/stocks/search?q=apple").json()["results"][0]["tracked"] is True
+    assert app.get("/api/stocks/search?q=bitcoin").json()["results"] == []  # crypto can't be tracked
+    assert {r["ticker"] for r in app.get("/api/stocks/search?q=s%26p").json()["results"]} == {"SPY"}  # ETFs can
+
+
+def test_add_star_and_remove_stocks_in_the_test_environment(fresh_db, client):
+    real = (testenv.MAIN / "watchlist.txt").read_bytes()
+    app = client(fresh_db)
+    view = app.get("/api/watchlist").json()
+    assert [(s["ticker"], s["main"]) for s in view["stocks"]] == [
+        ("AAPL", True), ("MSFT", True), ("NVDA", True), ("AMZN", False), ("JPM", False)]
+    assert view["stocks"][0]["name"] == "Apple" and view["stocks"][0]["latest"]["status"] == "intraday"
+
+    # Track Costco as a main stock: checked by the real watchlist.py, saved to the test watchlist
+    added = app.post("/api/watchlist", json={"ticker": "cost", "main": True})
+    assert added.status_code == 201 and added.json()["stock"]["name"] == "Costco Wholesale Corporation"
+    cost = next(s for s in added.json()["watchlist"]["stocks"] if s["ticker"] == "COST")
+    assert cost["main"] and cost["latest"] is None  # its first figures come with the next run
+    assert "*COST" in testenv.watchlist_path(fresh_db).read_text()
+    # Its earnings date is on the calendar straight away (simulated calendar, no cost)
+    assert wait_for(lambda: next(s for s in app.get("/api/watchlist").json()["stocks"]
+                                 if s["ticker"] == "COST")["next_event"])
+    # The next run reports on it, and its chart works; the other stocks' data hasn't changed
+    nvda_before = app.get("/api/tickers/NVDA/prices?range=1mo").json()["prices"][:-1]
+    app.post("/api/runs", json={})
+    assert wait_for_run(app)["result"]["outcome"] == "updated"
+    cost = next(s for s in app.get("/api/watchlist").json()["stocks"] if s["ticker"] == "COST")
+    assert cost["latest"]["session_date"] == "2026-11-06" and cost["latest"]["price"] > 0
+    assert "COST" in app.get("/api/reports/latest").json()["body_md"]
+    assert len(app.get("/api/tickers/COST/prices?range=1mo").json()["prices"]) == 21
+    assert app.get("/api/tickers/NVDA/prices?range=1mo").json()["prices"][:-1] == nvda_before
+
+    # The real rules apply: crypto, unknown tickers, doubles and the main-stock cap are refused
+    assert "cryptocurrency" in app.post("/api/watchlist", json={"ticker": "BTC-USD"}).json()["error"]
+    assert "doesn't know" in app.post("/api/watchlist", json={"ticker": "ZZZZ"}).json()["error"]
+    assert app.post("/api/watchlist", json={"ticker": "COST"}).status_code == 409
+
+    # Unstar and remove: the next run leaves it out
+    assert app.post("/api/watchlist/COST", json={"main": False}).status_code == 200
+    assert app.post("/api/watchlist/COST/remove", json={}).status_code == 200
+    assert "COST" not in testenv.read_tickers(testenv.watchlist_path(fresh_db))
+    assert testenv.simulate_finalize(fresh_db).startswith("finalized")
+    tickers = [t["ticker"] for t in app.get("/api/reports/latest").json()["tickers"]]
+    assert "COST" not in tickers and len(tickers) == 5
+    assert (testenv.MAIN / "watchlist.txt").read_bytes() == real  # the real watchlist was never edited
+
+
+def test_reseeding_gives_added_stocks_history(tmp_path):
+    db = seed(tmp_path)
+    testenv.connect_main(db)
+    import watchlist
+    testenv.install_fake_search(watchlist)
+    watchlist.add("KO")
+    status = testenv.status_summary(db)["watchlist"]
+    assert status["added_since_seeding"] == ["KO"] and status["main"] == ["AAPL", "MSFT", "NVDA"]
+
+    testenv.reset(db)
+    assert testenv.watchlist_path(db).is_file()  # reset keeps the test watchlist
+    testenv.seed_database(db, end=END)           # no --tickers: seeds what the test watchlist tracks
+    reports_db = testenv.connect_main(db)
+    with closing(reports_db.connect(db, readonly=True)) as c:
+        days = c.execute("SELECT COUNT(*) FROM report_tickers WHERE ticker = 'KO'").fetchone()[0]
+    assert days == 44 and testenv.status_summary(db)["watchlist"]["added_since_seeding"] == []
+
+
+def test_added_stocks_leave_the_rest_of_the_sample_unchanged():
+    before = SampleMarket(TICKERS, END)
+    after = SampleMarket(TICKERS, END)
+    after.watch([*TICKERS, "COST", "BRK-B"])
+    for t in TICKERS:
+        assert (after.closes[t] == before.closes[t]).all() and (after.volumes[t] == before.volumes[t]).all()
+    assert after.planned_events() == before.planned_events()
+    day = END
+    assert [f["ticker"] for f in after.scan(day)["flagged"] if f["ticker"] in TICKERS] == \
+           [f["ticker"] for f in before.scan(day)["flagged"]]
+    # The same stock gets the same simulated prices however it was added
+    again = SampleMarket(TICKERS, END)
+    again.add_ticker("COST")
+    assert (again.closes["COST"] == after.closes["COST"]).all() and after.sector["COST"] == "XLP"
 
 
 # ---------------------------------------------------------------------------

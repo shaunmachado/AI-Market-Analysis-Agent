@@ -3,8 +3,8 @@ import Markdown from './Markdown'
 import StatusBadge from './StatusBadge'
 import TickerTable from './TickerTable'
 
-// current: true for the latest report (see StatusBadge)
-export default function ReportView({ report, current = false }) {
+// current: true for the latest report (see StatusBadge). focus: the main stocks, for the Today tab's table
+export default function ReportView({ report, current = false, focus }) {
   return (
     <article className="report">
       <div className="report-head">
@@ -15,7 +15,7 @@ export default function ReportView({ report, current = false }) {
         </span>
       </div>
 
-      <TickerTable tickers={report.tickers} />
+      <TickerTable tickers={report.tickers} focus={focus} />
       <Markdown text={report.body_md} />
 
       {report.sources?.length > 0 && (

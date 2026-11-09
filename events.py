@@ -36,7 +36,8 @@ HORIZON_DAYS = 60        # how far ahead to look
 NEWS_PER_TICKER = 10     # headlines read per company
 MAX_EVENTS = 60          # most events accepted from one scan
 MAX_TITLE, MAX_DETAILS = 80, 400
-SCAN_BUDGET_USD = 0.25   # hard stop on Claude's cost per scan
+SCAN_BUDGET_USD = 0.25   # hard stop on Claude's cost per request
+BATCH_TICKERS = 10       # companies per Claude request: a long watchlist becomes several small requests
 STUCK_AFTER = timedelta(minutes=10)  # a "running" scan older than this is treated as crashed
 KINDS = ("earnings", "dividend", "news")
 
@@ -141,8 +142,11 @@ SUFFIX = re.compile(r"[\s,]+(inc\.?|incorporated|corporation|corp\.?|company|co\
 
 
 def short_name(name: str) -> str:
-    """'JPMorgan Chase & Co.' -> 'JPMorgan Chase', 'NVIDIA Corporation' -> 'NVIDIA'."""
+    """'JPMorgan Chase & Co.' -> 'JPMorgan Chase', 'NVIDIA Corporation' -> 'NVIDIA',
+    'The Coca-Cola Company' -> 'Coca-Cola'."""
     name = " ".join((name or "").split())
+    if name[:4].lower() == "the " and len(name) > 4:
+        name = name[4:]
     while True:
         shorter = SUFFIX.sub("", name).strip(" ,")
         if shorter == name or not shorter:
@@ -451,19 +455,28 @@ def scan(trigger: str = "command line", emit=None) -> dict:
                 except Exception as e:
                     problems.append(f"{ticker} news: {e}")
 
-            if articles:
-                emit({"type": "progress", "message": f"Reading {len(articles)} headlines for dated events"})
-                known_rows = [dict(r) for r in conn.execute(
-                    "SELECT id, ticker, kind, event_date, title FROM events WHERE event_date >= ? ORDER BY event_date",
-                    (today.isoformat(),))]
+            known_rows = [dict(r) for r in conn.execute(
+                "SELECT id, ticker, kind, event_date, title FROM events WHERE event_date >= ? ORDER BY event_date",
+                (today.isoformat(),))] if articles else []
+            batches = [tickers[i:i + BATCH_TICKERS] for i in range(0, len(tickers), BATCH_TICKERS)]
+            for n, batch in enumerate(batches, 1):
+                batch_articles = [a for a in articles if a["ticker"] in batch]
+                if not batch_articles:  # no headlines, no request (and no cost)
+                    continue
+                group = f" (group {n} of {len(batches)})" if len(batches) > 1 else ""
+                emit({"type": "progress", "message": f"Reading {len(batch_articles)} headlines for dated events{group}"})
                 try:
-                    reply, cost = ask_claude(build_prompt(articles, known_rows, today, horizon_end))
-                    accepted, dropped = validate(parse_reply(reply), articles, companies,
-                                                 {r["id"]: r for r in known_rows}, today, horizon_end)
+                    reply, batch_cost = ask_claude(build_prompt(
+                        batch_articles, [r for r in known_rows if r["ticker"] in batch], today, horizon_end))
+                    cost += batch_cost
+                    found, left_out = validate(parse_reply(reply), batch_articles, companies,
+                                               {r["id"]: r for r in known_rows}, today, horizon_end)
                     with transaction(conn):
-                        save_news(conn, accepted)
-                except Exception as e:
-                    problems.append(f"news scan: {e}")
+                        save_news(conn, found)
+                    accepted += found
+                    dropped += left_out
+                except Exception as e:  # one group failing doesn't lose the others
+                    problems.append(f"news scan{group}: {e}")
             status = "partial" if problems else "ok"
             message = "; ".join(problems)[:1000] or None
         except Exception as e:
@@ -476,6 +489,17 @@ def scan(trigger: str = "command line", emit=None) -> dict:
     summary["dropped_reasons"] = dropped
     emit({"type": "finished", "scan": summary})
     return summary
+
+
+def add_calendar_dates(ticker: str) -> int:
+    """A newly tracked company's earnings and dividend dates, straight away (Yahoo only: no Claude,
+    no cost). Its news events follow with the next daily scan. Returns how many dates were found."""
+    today = today_et()
+    found = calendar_events(ticker, company_name(ticker), fetch_calendar(ticker), today,
+                            today + timedelta(days=HORIZON_DAYS))
+    with closing(connect()) as conn, transaction(conn):
+        save_calendar(conn, ticker, found, today)
+    return len(found)
 
 
 # ---------------------------------------------------------------------------

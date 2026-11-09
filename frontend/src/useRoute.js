@@ -6,10 +6,12 @@ import { useEffect, useState } from 'react'
 //   #/previous/2026-11-05   Previous days, with that day open
 //   #/calendar              Upcoming events calendar
 //   #/calendar/2026-11-12   The calendar, with that day's events open
+//   #/stocks                Every tracked stock, and finding new ones
 // So tabs and days can be bookmarked, and the browser's Back button works.
 
 function parse(hash) {
   const [, tab, date] = hash.replace(/^#/, '').split('/')
+  if (tab === 'stocks') return { tab: 'stocks', date: null }
   if (tab !== 'previous' && tab !== 'calendar') return { tab: 'today', date: null }
   return { tab, date: /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : null }
 }
@@ -18,6 +20,7 @@ export const routes = {
   today: '#/',
   previous: (date) => (date ? `#/previous/${date}` : '#/previous'),
   calendar: (date) => (date ? `#/calendar/${date}` : '#/calendar'),
+  stocks: '#/stocks',
 }
 
 export function useRoute() {

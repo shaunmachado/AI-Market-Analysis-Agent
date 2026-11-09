@@ -48,11 +48,13 @@ from starlette.staticfiles import StaticFiles
 
 import alerts
 import ask
+import market_tools
 import events as upcoming  # events.py ("events" here is the live-updates endpoint)
 import prices
 import reports_db
 import run_brief
 import search_index
+import watchlist
 
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 TICKER = re.compile(r"[A-Za-z0-9.\-^=]{1,15}")
@@ -253,6 +255,152 @@ def search_status(request):
 
 
 # ---------------------------------------------------------------------------
+# Tracked stocks (the Stocks tab, and the main ones on the Today tab)
+# ---------------------------------------------------------------------------
+
+_names_requested: set[str] = set()  # company names being looked up, so each is only asked for once
+
+
+def _watchlist_view() -> dict:
+    """Every tracked stock, main ones first, with its latest figures and next calendar event."""
+    tracked = watchlist.entries()
+    tickers = [e["ticker"] for e in tracked]
+    with _db() as conn:
+        latest = reports_db.latest_report(conn)
+        rows = {t["ticker"]: {**t, "session_date": latest["session_date"], "status": latest["status"]}
+                for t in (latest or {}).get("tickers", [])}
+        for t in tickers:
+            if t not in rows:  # not in the latest report (e.g. just added): its most recent figures, if any
+                history = reports_db.ticker_history(conn, t, limit=1)
+                if history:
+                    rows[t] = history[0]
+        next_event = {}
+        for e in upcoming.upcoming(conn, upcoming.today_et(), upcoming.HORIZON_DAYS, tickers):
+            next_event.setdefault(e["ticker"], {"event_date": e["event_date"], "kind": e["kind"], "title": e["title"],
+                                                "line": upcoming.event_line(e, company=False)})
+        try:
+            calendar_names = dict(conn.execute("SELECT ticker, company FROM events GROUP BY ticker"))
+        except Exception:  # no calendar yet
+            calendar_names = {}
+    stocks = []
+    for e in sorted(tracked, key=lambda e: not e["main"]):  # main first, each group in list order
+        row = rows.get(e["ticker"])
+        stocks.append({
+            "ticker": e["ticker"], "main": e["main"], "benchmark": e["benchmark"],
+            "name": upcoming._names.get(e["ticker"]) or calendar_names.get(e["ticker"]),
+            "latest": None if row is None else {k: row.get(k) for k in (
+                "session_date", "status", "category", "price", "return_1d_pct", "return_zscore", "move_read")},
+            "next_event": next_event.get(e["ticker"]),
+        })
+    return {"stocks": stocks, "tracked_count": len(stocks), "main_count": sum(s["main"] for s in stocks),
+            "max_tracked": watchlist.MAX_TRACKED, "max_main": watchlist.MAX_MAIN}
+
+
+def _in_background(coroutine) -> None:
+    task = asyncio.create_task(coroutine)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
+async def _fill_names(tickers: list[str]) -> None:
+    """Look up company names Yahoo hasn't given us yet, then tell open pages to refresh."""
+    def look_up():
+        for t in tickers:
+            try:
+                upcoming._names[t] = upcoming.company_name(t)
+            except Exception:
+                pass
+    await asyncio.to_thread(look_up)
+    hub.publish({"type": "watchlist_changed"})
+
+
+async def _calendar_for_new_stock(ticker: str) -> None:
+    """A new stock's earnings and dividend dates (Yahoo only, no cost), so its next event shows straight away."""
+    try:
+        await asyncio.to_thread(upcoming.add_calendar_dates, ticker)
+        hub.publish({"type": "calendar_updated", "scan": None})
+    except Exception as e:
+        log.warning("Couldn't add %s's calendar dates (the next daily scan will): %s", ticker, e)
+
+
+async def watchlist_view(request):
+    try:
+        view = await asyncio.to_thread(_watchlist_view)
+    except FileNotFoundError:
+        return _error(404, "watchlist.txt is missing: create it with one ticker per line")
+    missing = [s["ticker"] for s in view["stocks"] if not s["name"] and s["ticker"] not in _names_requested]
+    if missing:
+        _names_requested.update(missing)
+        _in_background(_fill_names(missing))
+    return JSONResponse(view)
+
+
+def search_stocks(request):
+    q = request.query_params.get("q", "").strip()
+    if not q:
+        return _error(400, "q is required")
+    if len(q) > 60:
+        return _error(400, "keep searches under 60 characters")
+    try:
+        return JSONResponse({"query": q, "results": watchlist.search(q)})
+    except watchlist.WatchlistError as e:
+        return _error(502, str(e))
+
+
+async def _watchlist_change(request, action):
+    """Shared by add, star and remove: checks, the change itself, then live updates."""
+    if blocked := _post_guard(request):
+        return blocked
+    try:
+        body = await request.json()
+    except ValueError:
+        return _error(400, "send JSON")
+    if not isinstance(body, dict):
+        return _error(400, "send a JSON object")
+    try:
+        result = await asyncio.to_thread(action, body)
+    except watchlist.WatchlistError as e:
+        return _error(e.status, str(e))
+    hub.publish({"type": "watchlist_changed"})
+    return result
+
+
+async def add_stock(request):
+    async def respond(info):
+        _in_background(_calendar_for_new_stock(info["ticker"]))
+        return JSONResponse({"stock": info, "watchlist": await asyncio.to_thread(_watchlist_view)}, status_code=201)
+
+    def action(body):
+        ticker = body.get("ticker")
+        if not isinstance(ticker, str):
+            raise watchlist.WatchlistError('send {"ticker": "COST"}')
+        return watchlist.add(ticker, main=bool(body.get("main")))
+
+    result = await _watchlist_change(request, action)
+    return await respond(result) if isinstance(result, dict) else result
+
+
+async def star_stock(request):
+    def action(body):
+        if not isinstance(body.get("main"), bool):
+            raise watchlist.WatchlistError('send {"main": true} or {"main": false}')
+        watchlist.set_main(request.path_params["ticker"], body["main"])
+        return _watchlist_view()
+
+    result = await _watchlist_change(request, action)
+    return JSONResponse(result) if isinstance(result, dict) else result
+
+
+async def remove_stock(request):
+    def action(body):
+        watchlist.remove(request.path_params["ticker"])
+        return _watchlist_view()
+
+    result = await _watchlist_change(request, action)
+    return JSONResponse(result) if isinstance(result, dict) else result
+
+
+# ---------------------------------------------------------------------------
 # Live updates
 # ---------------------------------------------------------------------------
 
@@ -298,20 +446,29 @@ def _latest_change() -> dict | None:
 
 async def watch_reports() -> None:
     """Checks the database every few seconds and announces new or updated reports."""
-    def check():  # both in one trip to a worker thread
-        return _latest_change(), _latest_calendar_scan()
+    def watchlist_stamp():
+        try:
+            return market_tools.WATCHLIST_FILE.stat().st_mtime_ns
+        except OSError:
+            return None
 
-    last, last_scan = await asyncio.to_thread(check)
+    def check():  # all in one trip to a worker thread
+        return _latest_change(), _latest_calendar_scan(), watchlist_stamp()
+
+    last, last_scan, last_stamp = await asyncio.to_thread(check)
     while True:
         await asyncio.sleep(POLL_SECONDS)
         try:
-            current, scan = await asyncio.to_thread(check)
+            current, scan, stamp = await asyncio.to_thread(check)
         except Exception:  # e.g. the database is briefly locked; try again next time
             continue
         if current and current != last:
             last = current
             hub.publish({"type": "report_saved", **current})
             update_index_in_background()  # covers scheduled runs, which are separate programs
+        if stamp != last_stamp:  # watchlist.txt changed, by the app or by hand
+            last_stamp = stamp
+            hub.publish({"type": "watchlist_changed"})
         if scan and scan != last_scan:
             last_scan = scan
             if scan["finished_at"]:  # a calendar update finished (scheduled or "Update now")
@@ -607,6 +764,11 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> Starlette:
         Route("/api/calendar/scan", current_calendar_scan, methods=["GET"]),
         Route("/api/search", search_reports),
         Route("/api/search/status", search_status),
+        Route("/api/watchlist", watchlist_view, methods=["GET"]),
+        Route("/api/watchlist", add_stock, methods=["POST"]),
+        Route("/api/watchlist/{ticker}", star_stock, methods=["POST"]),
+        Route("/api/watchlist/{ticker}/remove", remove_stock, methods=["POST"]),
+        Route("/api/stocks/search", search_stocks),
         Route("/api/events", events),
         Route("/api/runs", start_run, methods=["POST"]),
         Route("/api/runs/current", current_run),

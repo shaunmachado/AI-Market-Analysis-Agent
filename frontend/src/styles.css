@@ -101,7 +101,7 @@ textarea {
 
 .report-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 
-.table-wrap { overflow-x: auto; margin-bottom: 8px; }
+.table-wrap { position: relative; overflow-x: auto; margin-bottom: 8px; } /* relative: keeps hidden labels inside the scroll area */
 .tickers { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .tickers th, .tickers td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 .tickers th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
@@ -298,3 +298,33 @@ mark { background: var(--live-bg); color: inherit; border-radius: 2px; padding: 
 .coming-up li a:hover { background: var(--bg); }
 .cu-date { flex: none; width: 6.5em; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
 .cu-what { min-width: 0; font-size: 0.9rem; }
+
+/* Stocks tab, and the Today tab's focus on main stocks */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tickers .group-row th { padding-top: 14px; font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.table-note { margin: 6px 0 0; }
+.stocks-find { margin-bottom: 16px; }
+.stocks-find input[type="search"] {
+  width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.notice { color: var(--final); }
+.search-hits { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.search-hits li {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+}
+.hit-name { min-width: 0; overflow-wrap: anywhere; }
+.hit-actions { display: flex; gap: 6px; }
+.hit-actions .chip { cursor: pointer; }
+.hit-actions .chip:disabled { opacity: 0.5; cursor: not-allowed; }
+.star { background: none; border: 0; padding: 2px; color: var(--muted); cursor: pointer; line-height: 0; border-radius: 4px; }
+.star.on { color: var(--live); }
+.star:disabled { opacity: 0.4; cursor: not-allowed; }
+.star:focus-visible { outline: 2px solid var(--accent); }
+.stocks .stock-name { max-width: 16em; overflow: hidden; text-overflow: ellipsis; }
+.stocks .next-event a { color: var(--text); }
+.row-actions { text-align: right; }
+.row-actions .link { padding: 0 0 0 10px; }
+.link.danger { color: var(--down); }
+

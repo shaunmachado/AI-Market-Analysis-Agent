@@ -66,10 +66,11 @@ def _to_et(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
 
 def _watchlist_entries() -> list[list[str]]:
     """Each line: a ticker, optionally followed by the benchmark to compare it with.
-    Anything after a # is a comment."""
+    A * before the ticker marks a main stock for the dashboard (see watchlist.py); the
+    agent tracks every ticker either way. Anything after a # is a comment."""
     entries = []
     for line in WATCHLIST_FILE.read_text().splitlines():
-        words = line.split("#", 1)[0].upper().split()
+        words = line.split("#", 1)[0].replace("*", " ").upper().split()
         if words:
             entries.append(words)
     return entries
@@ -388,8 +389,9 @@ def flag_events(z_threshold: float = 2.0, volume_threshold: float = 2.0) -> dict
             errors.append(m)
         elif abs(m["return_zscore"]) >= z_threshold or (m["volume_vs_avg"] or 0) >= volume_threshold:
             flagged.append(m)
-        else:
-            quiet.append({"ticker": ticker, "return_1d_pct": m["return_1d_pct"]})
+        else:  # the price too, so the Stocks tab can show every tracked stock's price
+            price = {k: m[k] for k in ("last_close", "last_price") if k in m}
+            quiet.append({"ticker": ticker, **price, "return_1d_pct": m["return_1d_pct"]})
 
     # Sector and market context for each flagged move (each ETF is downloaded once)
     for m in flagged:

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getCurrentRun, getLatestReport } from './api'
+import { getCurrentRun, getLatestReport, getWatchlist } from './api'
 import { ChartContext } from './chartContext'
 import { useLiveEvents } from './useLiveEvents'
 import { routes, useRoute } from './useRoute'
@@ -10,6 +10,7 @@ import PreviousDaysPreview from './components/PreviousDaysPreview'
 import PreviousDaysTab from './components/PreviousDaysTab'
 import ReportView from './components/ReportView'
 import RunPanel from './components/RunPanel'
+import StocksTab from './components/StocksTab'
 import TickerChart from './components/TickerChart'
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
   const [chartTicker, setChartTicker] = useState(null)
   const [calendarScan, setCalendarScan] = useState(null) // "Update now" on the Calendar tab
   const [calendarVersion, setCalendarVersion] = useState(0) // tells the calendar to reload
+  const [watchlist, setWatchlist] = useState(null) // tracked stocks; the main ones focus the Today tab
   const chartOpener = useRef(null) // gets focus back when the chart closes
 
   const openChart = useCallback((ticker, opener) => {
@@ -41,10 +43,17 @@ export default function App() {
       .catch((error) => setLatestError(error.message))
   }, [])
 
+  const loadWatchlist = useCallback(() => {
+    getWatchlist()
+      .then(setWatchlist)
+      .catch(() => {}) // the Today tab then shows every ticker, as before
+  }, [])
+
   useEffect(() => {
     loadLatest()
+    loadWatchlist()
     getCurrentRun().then(setRun).catch(() => {})
-  }, [loadLatest])
+  }, [loadLatest, loadWatchlist])
 
   useEffect(() => {
     window.scrollTo(0, 0) // start each tab at the top
@@ -60,8 +69,12 @@ export default function App() {
       setCalendarScan(event.scan)
     } else if (event.type === 'calendar_updated') {
       setCalendarVersion((v) => v + 1) // any calendar update: the daily scan, or "Update now"
+      loadWatchlist() // next events
+    } else if (event.type === 'watchlist_changed') {
+      loadWatchlist() // from this page, another tab, or watchlist.txt edited by hand
     } else if (event.type === 'report_saved') {
       loadLatest()
+      loadWatchlist() // latest figures
       setLastSaved(event)
     } else if (event.type === 'run_started' || event.type === 'run_finished') {
       setRun(event.run)
@@ -91,6 +104,7 @@ export default function App() {
             {tabLink('today', routes.today, 'Today')}
             {tabLink('previous', routes.previous(), 'Previous days')}
             {tabLink('calendar', routes.calendar(), 'Calendar')}
+            {tabLink('stocks', routes.stocks, 'Stocks')}
           </nav>
           <span className={`connection ${connected ? 'on' : 'off'}`}>
             {connected ? 'Live' : 'Reconnecting…'}
@@ -103,7 +117,7 @@ export default function App() {
             <section className="panel latest" aria-label="Latest report">
               <h2>Latest report</h2>
               {latest ? (
-                <ReportView report={latest} current />
+                <ReportView report={latest} current focus={watchlist?.stocks.filter((s) => s.main).map((s) => s.ticker)} />
               ) : (
                 <p className="muted">
                   {latestError === 'no reports yet'
@@ -129,6 +143,10 @@ export default function App() {
             lastSaved={lastSaved}
             selectedDate={route.tab === 'previous' ? route.date : null}
           />
+        </div>
+
+        <div hidden={route.tab !== 'stocks'}>
+          <StocksTab list={watchlist} onChange={setWatchlist} />
         </div>
 
         <div hidden={route.tab !== 'calendar'}>

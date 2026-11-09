@@ -19,6 +19,7 @@ The API's "Run update now" button calls run_once() from here too.
 """
 
 import asyncio
+import dataclasses
 import json
 import os
 import sys
@@ -48,9 +49,10 @@ from claude_agent_sdk import (  # noqa: E402
 import alerts  # noqa: E402
 import reports_db  # noqa: E402
 import search_index  # noqa: E402
-from market_tools import flag_events, market_session, now_et  # noqa: E402
+from market_tools import flag_events, load_watchlist, market_session, now_et  # noqa: E402
 
 HERE = Path(__file__).parent
+BASE_TURNS = 25  # enough for a small watchlist; turn_limit() adds room as the list grows
 
 options = ClaudeAgentOptions(
     system_prompt=(HERE / "analyst_prompt.md").read_text(),
@@ -70,10 +72,20 @@ options = ClaudeAgentOptions(
         "mcp__market__get_news",
         "mcp__market__upcoming_events",
     ],
-    max_turns=25,
+    max_turns=BASE_TURNS,    # each run uses turn_limit() instead (below)
     max_budget_usd=1.00,     # hard stop on cost per run
     env=AGENT_ENV,
 )
+
+
+def turn_limit() -> int:
+    """Turns for one run: room for a news check on every tracked stock, so a market-wide day
+    (when most of the list can be flagged) still finishes. max_budget_usd still caps the cost."""
+    try:
+        return max(BASE_TURNS, len(load_watchlist()) + 10)
+    except OSError:
+        return BASE_TURNS
+
 
 
 def report_key(session: dict) -> tuple[str, str]:
@@ -140,7 +152,7 @@ async def run_once(emit=None) -> dict:
 
     calls = {}  # tool_use_id -> (tool name, arguments)
     scan, sources, result = None, [], None
-    async for message in query(prompt=prompt, options=options):
+    async for message in query(prompt=prompt, options=dataclasses.replace(options, max_turns=turn_limit())):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, ToolUseBlock):

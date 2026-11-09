@@ -28,6 +28,22 @@ export const searchReports = (q, limit = 12) =>
 
 export const getAlerts = (limit = 10) => request(`/api/alerts?limit=${limit}`)
 
+export const getWatchlist = () => request('/api/watchlist')
+
+export const searchStocks = (q) => request(`/api/stocks/search?q=${encodeURIComponent(q)}`).then((body) => body.results)
+
+async function post(path, data) {
+  const response = await postJSON(path, data)
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`)
+  return body
+}
+
+// Each returns the updated list (adding also returns the new stock's details)
+export const addStock = (ticker, main = false) => post('/api/watchlist', { ticker, main })
+export const setMainStock = (ticker, main) => post(`/api/watchlist/${encodeURIComponent(ticker)}`, { main })
+export const removeStock = (ticker) => post(`/api/watchlist/${encodeURIComponent(ticker)}/remove`, {})
+
 export const getCalendar = (start, end) => request(`/api/calendar?start=${start}&end=${end}`)
 
 export async function startCalendarScan() {

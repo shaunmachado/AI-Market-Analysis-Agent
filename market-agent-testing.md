@@ -1,8 +1,8 @@
 # Market Analyst Agent: Testing Guide
 
-How to test the market analyst agent, from quick offline checks to full runs with Claude, Discord alerts, the events calendar, tracked stocks and the schedule.
+How to test the market analyst agent, from quick offline checks to full runs with Claude, Discord alerts, the events calendar, tracked stocks, follow-through and story updates, and the schedule.
 
-This version covers the whole project, up to the guide that adds finding and tracking stocks (`market-agent-stocks.md`). For trying the app on two months of sample data, see `market-agent-test-enviro.md`. For the public live demo, see `market-agent-demo.md`.
+This version covers the whole project, up to the guide that adds follow-through and story updates (`market-agent-followups.md`). For trying the app on two months of sample data, see `market-agent-test-enviro.md`. For the public live demo, see `market-agent-demo.md`.
 
 ---
 
@@ -14,7 +14,7 @@ This version covers the whole project, up to the guide that adds finding and tra
 4. [Live data check](#4-live-data-check)
 5. [Manual tool check with the MCP Inspector](#5-manual-tool-check-with-the-mcp-inspector)
 6. [Agent test runs](#6-agent-test-runs)
-7. [Alerts, calendar and Stocks tab checks](#7-alerts-calendar-and-stocks-tab-checks)
+7. [Alerts, calendar, Stocks tab and follow-through checks](#7-alerts-calendar-stocks-tab-and-follow-through-checks)
 8. [Schedule test](#8-schedule-test)
 9. [Quality log](#9-quality-log)
 10. [Testing a new tool](#10-testing-a-new-tool)
@@ -29,12 +29,13 @@ Test in layers, from fastest to slowest. Each layer catches a different kind of 
 
 | Layer | What it checks | Needs | When to run it |
 |---|---|---|---|
-| Offline tests | Tool math, sector verdicts, storage rules, API, search, alerts, the events calendar, tracked stocks | Nothing | After every code change |
+| Offline tests | Tool math, sector verdicts, storage rules, API, search, alerts, the events calendar, tracked stocks, follow-through and story updates | Nothing | After every code change |
 | Live data check | Yahoo Finance returns real data, including sectors, sector ETFs, company calendars and stock search | Internet | Once at setup, then if data looks wrong |
 | MCP Inspector | The tools work the way Claude will see them | Node.js, internet | After changing a tool |
 | Agent test runs | Claude uses the tools well and writes a good brief | API key (uses credits) | After changing the prompt or tools |
 | Alerts check | Messages reach your Discord channel and phone | A Discord webhook | Once at setup, then after changing alerts |
 | Calendar check | Real earnings dates and news events are right, with working links | API key (a few cents a scan) | Once at setup, then now and then |
+| Follow-through check | Real later prices match Yahoo, and story updates report what newer headlines say, with working links | API key (a few cents a check) | Once at setup, then now and then |
 | Schedule test | The scheduled job actually runs, with all its keys | Cron or Task Scheduler | Once, when setting up the schedule |
 | Quality log | The briefs and alerts are useful over time | Your judgment | Daily for the first week or two |
 
@@ -47,6 +48,7 @@ Test in layers, from fastest to slowest. Each layer catches a different kind of 
 | Agent test run | Live data and Inspector | The prompt (`analyst_prompt.md`) or the agent settings (`run_brief.py`) |
 | Alerts check | Offline alert tests | The webhook address, or the network to Discord |
 | Calendar check | Offline calendar tests | Yahoo's data, or what Claude reads in the news (check the "left out" lines and the links) |
+| Follow-through check | Offline follow-through tests | Yahoo's prices or headlines, or what Claude makes of them (open the sources) |
 | Schedule test | Manual agent run | The scheduler: paths, keys missing from its environment, or the computer asleep |
 
 ---
@@ -66,7 +68,8 @@ market-agent/
     ├── test_alerts.py              Discord alerts
     ├── test_events.py              the events calendar: Yahoo dates, news events, checks, API
     ├── test_calendar_links.py      the calendar in briefs, Discord alerts, Ask and search
-    └── test_watchlist.py           tracked and main stocks: the watchlist file, search, API, longer lists
+    ├── test_watchlist.py           tracked and main stocks: the watchlist file, search, API, longer lists
+    └── test_followups.py           follow-through and story updates: judging moves, prices, checks, API, Ask
 ```
 
 | File | Tests | Comes from |
@@ -81,18 +84,19 @@ market-agent/
 | `test_events.py` | 47, plus 1 live check | `market-agent-events-calendar.md` |
 | `test_calendar_links.py` | 13 | `market-agent-calendar-connect.md` |
 | `test_watchlist.py` | 33, plus 1 live check | `market-agent-stocks.md` |
-| `conftest.py` | (shared setup) | `market-agent-alerts.md` |
+| `test_followups.py` | 35 | `market-agent-followups.md` |
+| `conftest.py` | (shared setup) | `market-agent-followups.md` (first added in `market-agent-alerts.md`) |
 
-The test environment and the live demo have their own tests, in their own folders: `pytest -v` in `market-agent-testenv/` gives `29 passed` (`market-agent-test-enviro.md`), and in `market-agent-demo/` gives `16 passed` (`market-agent-demo.md`).
+The test environment and the live demo have their own tests, in their own folders: `pytest -v` in `market-agent-testenv/` gives `33 passed` (`market-agent-test-enviro.md`), and in `market-agent-demo/` gives `17 passed` (`market-agent-demo.md`).
 
-To create or update `test_market_tools.py`, replace its contents with the code from the [appendix](#appendix-test-file-source). **It matches `market_tools.py` from the sector context guide.** With an older `market_tools.py`, its 13 sector-context tests fail.
+To create or update `test_market_tools.py`, replace its contents with the code from the [appendix](#appendix-test-file-source). **It matches `market_tools.py` from the sector context guide onwards.** With an older `market_tools.py`, its 13 sector-context tests fail. Its MCP check expects all six tools, including `past_moves` from the follow-through guide: before that guide, it's the one test that fails.
 
 **How the tests work:**
 
 - **Market data is faked.** yfinance is swapped for a fake that returns made-up daily prices, 5-minute bars, news and company profiles (for sectors), in the same shape as the real thing.
 - **The clock is faked.** "Market open", "weekend", "holiday" and "early close" can be tested on any day.
 - **Nothing real is touched.** The tests use a temporary watchlist and temporary databases, so your real `watchlist.txt` and `reports.db` are never touched.
-- **Claude, Voyage and Discord are faked.** `conftest.py` removes `DISCORD_WEBHOOK_URL` and `VOYAGE_API_KEY` for every test, so tests can't reach them even if they're set in your terminal.
+- **Claude, Voyage and Discord are faked.** `conftest.py` removes `DISCORD_WEBHOOK_URL` and `VOYAGE_API_KEY` for every test, so tests can't reach them even if they're set in your terminal. It also stops runs in other tests from following up after a final report, which would download prices; `test_followups.py` fakes those itself.
 
 Results are the same on every run, and no internet or keys are needed.
 
@@ -107,7 +111,7 @@ pip install pytest
 pytest -v
 ```
 
-**Expected result:** `241 passed, 3 skipped`. The skipped tests are the three live data checks in section 4.
+**Expected result:** `276 passed, 3 skipped`. The skipped tests are the three live data checks in section 4.
 
 If you're partway through the guides, the total so far:
 
@@ -119,6 +123,7 @@ If you're partway through the guides, the total so far:
 | `market-agent-events-calendar.md` | `195 passed, 2 skipped` |
 | `market-agent-calendar-connect.md` | `208 passed, 2 skipped` |
 | `market-agent-stocks.md` | `241 passed, 3 skipped` |
+| `market-agent-followups.md` | `276 passed, 3 skipped` |
 
 To run one area only, name its file: `pytest -v tests/test_market_tools.py` should give `34 passed, 1 skipped`.
 
@@ -181,7 +186,7 @@ To run one area only, name its file: `pytest -v tests/test_market_tools.py` shou
 | Test | Proves that |
 |---|---|
 | `test_news_handles_both_yfinance_formats_and_caps_limit` | Both yfinance news formats are read, summaries are trimmed and results are capped at 10 |
-| `test_tools_work_through_mcp` | All five tools work through a real MCP client, the same way the agent calls them |
+| `test_tools_work_through_mcp` | All six tools work through a real MCP client, the same way the agent calls them |
 | `test_live_data` | Real data comes back from Yahoo Finance, including Apple's sector ETF and the backdrop (skipped unless you turn it on) |
 
 **Tip: check the tests catch real bugs.** Make one of these temporary changes in `market_tools.py`, run `pytest tests/test_market_tools.py`, then change it back:
@@ -194,7 +199,7 @@ To run one area only, name its file: `pytest -v tests/test_market_tools.py` shou
 | In `describe_context`: `if abs(gap_z) >= CONTEXT_Z:` → `if False:` | The stock-specific and intraday context tests |
 | In `flag_events`: pass `{}` instead of `measured` to `_context` | `test_each_benchmark_is_downloaded_once_per_scan` |
 
-The alerts guide (section 11.1) and the calendar guide (section 10.1) have the same kind of checks for `alerts.py` and `events.py`.
+The alerts guide (section 11.1), the calendar guide (section 10.1) and the follow-through guide (section 11.1) have the same kind of checks for `alerts.py`, `events.py`, `followups.py` and `stories.py`.
 
 ---
 
@@ -369,7 +374,7 @@ Each scenario tests a different part of the brief. Make the change, run `python 
 
 ---
 
-## 7. Alerts, calendar and Stocks tab checks
+## 7. Alerts, calendar, Stocks tab and follow-through checks
 
 ### 7.1 Alerts
 
@@ -433,6 +438,17 @@ Do this once you've added finding and tracking stocks (`market-agent-stocks.md`)
 8. **Longer lists:** with more than 10 stocks, `python events.py scan` reads the headlines in groups ("group 1 of 2") and prints one cost for the whole scan.
 
 Afterwards, put back your own list if you changed it.
+
+### 7.4 Follow-through and story updates
+
+Do this once you've added follow-through (`market-agent-followups.md`). Prices are free; each story check costs a few cents.
+
+1. **Prices:** `python followups.py update` ends with `ok`. For one move from `python followups.py list`, check the next-day figure against Yahoo Finance's historical prices: the next day's close divided by the move day's close, minus 1.
+2. **Patterns:** the Follow-through tab's "All flagged moves" counts match `python followups.py patterns`.
+3. **A story check:** on the Story updates tab, check a recent move. Open each source: it was published after the move and says what the update says. The cost shown is a few cents.
+4. **No newer news:** a check that finds no newer headlines says "No newer news", and shows no cost.
+5. **After a final report:** the run log shows "Follow-through: …". Within a week of a surprise, its automatic check appears, labelled "automatically: a surprise".
+6. **Ask:** "What happened after [a ticker]'s last flagged move?" cites (follow-through).
 
 ---
 
@@ -531,13 +547,13 @@ def test_earnings_date_found_and_missing():
 **5. Update the MCP test.** `test_tools_work_through_mcp` checks the exact list of tools, so add the new name:
 
 ```python
-    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events",
+    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events", "past_moves",
                      "get_earnings_date"}
 ```
 
 **6. Let the agent use it.** Add `"mcp__market__get_earnings_date"` to `allowed_tools` in `run_brief.py`, and mention `` `get_earnings_date` `` in `analyst_prompt.md` (when to call it). `test_agent_can_use_every_market_tool` fails until you've done both, which stops a tool being added that the agent can't use.
 
-**7. Run `pytest -v`.** Expect one more test than before (`242 passed, 3 skipped` with everything up to the stocks guide). Then check the new tool in the Inspector with live data (section 5).
+**7. Run `pytest -v`.** Expect one more test than before (`277 passed, 3 skipped` with everything up to the follow-through guide). Then check the new tool in the Inspector with live data (section 5).
 
 **General rules for tool tests:**
 
@@ -565,6 +581,7 @@ def test_earnings_date_found_and_missing():
 | Calendar tests fail with `no such table: events` | An old `events.py`. Replace it from the calendar guide's appendix. |
 | `test_live_calendar_data` fails | Yahoo's calendar or company profile didn't load. Retry later, or run `pip install -U yfinance`. |
 | `ModuleNotFoundError: No module named 'watchlist'` | `test_watchlist.py` is there but `watchlist.py` isn't. Do the stocks guide, or remove `test_watchlist.py` until you do. |
+| `ModuleNotFoundError: No module named 'followups'` (or `stories`) | `test_followups.py` or the new `conftest.py` is there but `followups.py` and `stories.py` aren't. Do the follow-through guide, or remove `test_followups.py` until you do. |
 | `test_live_search` fails with "Searching needs a newer yfinance" | Run `pip install -U yfinance`. |
 | `test_live_search` fails without finding `COST` | Yahoo's search didn't answer (rate limiting or a network problem). Wait a few minutes and retry. |
 | Live test shows `skipped` | `LIVE_TESTS` isn't set. Use the exact command for your system in section 4. |
@@ -1166,7 +1183,7 @@ def test_tools_work_through_mcp(fake_market):
 
     names, result = asyncio.run(run())
 
-    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events"}
+    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events", "past_moves"}
     assert not result.is_error
     payload = json.loads(result.content[0].text)  # the JSON text the agent receives
     assert payload["session"]["status"] == "complete"

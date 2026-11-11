@@ -6,11 +6,13 @@ import { routes, useRoute } from './useRoute'
 import AskPanel from './components/AskPanel'
 import CalendarTab from './components/CalendarTab'
 import ComingUp from './components/ComingUp'
+import FollowThroughTab from './components/FollowThroughTab'
 import PreviousDaysPreview from './components/PreviousDaysPreview'
 import PreviousDaysTab from './components/PreviousDaysTab'
 import ReportView from './components/ReportView'
 import RunPanel from './components/RunPanel'
 import StocksTab from './components/StocksTab'
+import StoriesTab from './components/StoriesTab'
 import TickerChart from './components/TickerChart'
 
 export default function App() {
@@ -23,6 +25,10 @@ export default function App() {
   const [calendarScan, setCalendarScan] = useState(null) // "Update now" on the Calendar tab
   const [calendarVersion, setCalendarVersion] = useState(0) // tells the calendar to reload
   const [watchlist, setWatchlist] = useState(null) // tracked stocks; the main ones focus the Today tab
+  const [followVersion, setFollowVersion] = useState(0) // tells the Follow-through tab to reload
+  const [refreshJob, setRefreshJob] = useState(null) // "Refresh prices" on the Follow-through tab
+  const [storiesVersion, setStoriesVersion] = useState(0) // tells the Story updates tab to reload
+  const [storyJob, setStoryJob] = useState(null) // "Check for updates" on the Story updates tab
   const chartOpener = useRef(null) // gets focus back when the chart closes
 
   const openChart = useCallback((ticker, opener) => {
@@ -80,6 +86,20 @@ export default function App() {
       setRun(event.run)
     } else if (event.type === 'run_event') {
       setRun((current) => current && { ...current, log: [...current.log, event.event] })
+    } else if (event.type === 'followups_refresh') {
+      setRefreshJob(event.job)
+      if (event.job.state !== 'running') setFollowVersion((v) => v + 1)
+    } else if (event.type === 'followups_updated') {
+      setFollowVersion((v) => v + 1) // after a final report, "Refresh prices", or another program
+    } else if (event.type === 'story_check') {
+      setStoryJob(event.job)
+      if (event.job.state !== 'running') {
+        setStoriesVersion((v) => v + 1)
+        setFollowVersion((v) => v + 1) // the moves table links to each move's latest story
+      }
+    } else if (event.type === 'story_checked') {
+      setStoriesVersion((v) => v + 1)
+      setFollowVersion((v) => v + 1)
     }
   })
 
@@ -88,6 +108,10 @@ export default function App() {
     setRun((current) => (current && current.started_at === started.started_at ? current : started))
   const onCalendarScanStarted = (started) =>
     setCalendarScan((current) => (current && current.started_at === started.started_at ? current : started))
+  const onRefreshStarted = (started) =>
+    setRefreshJob((current) => (current && current.started_at === started.started_at ? current : started))
+  const onStoryCheckStarted = (started) =>
+    setStoryJob((current) => (current && current.started_at === started.started_at ? current : started))
 
   const tabLink = (tab, href, label) => (
     <a href={href} className={`tab ${route.tab === tab ? 'active' : ''}`} aria-current={route.tab === tab ? 'page' : undefined}>
@@ -105,6 +129,8 @@ export default function App() {
             {tabLink('previous', routes.previous(), 'Previous days')}
             {tabLink('calendar', routes.calendar(), 'Calendar')}
             {tabLink('stocks', routes.stocks, 'Stocks')}
+            {tabLink('followthrough', routes.followThrough, 'Follow-through')}
+            {tabLink('stories', routes.stories(), 'Story updates')}
           </nav>
           <span className={`connection ${connected ? 'on' : 'off'}`}>
             {connected ? 'Live' : 'Reconnecting…'}
@@ -147,6 +173,24 @@ export default function App() {
 
         <div hidden={route.tab !== 'stocks'}>
           <StocksTab list={watchlist} onChange={setWatchlist} />
+        </div>
+
+        <div hidden={route.tab !== 'followthrough'}>
+          <FollowThroughTab
+            version={followVersion}
+            refresh={refreshJob}
+            onRefreshStarted={onRefreshStarted}
+            latestDate={latest?.session_date}
+          />
+        </div>
+
+        <div hidden={route.tab !== 'stories'}>
+          <StoriesTab
+            version={storiesVersion}
+            job={storyJob}
+            onCheckStarted={onStoryCheckStarted}
+            picked={route.tab === 'stories' ? { date: route.date, ticker: route.ticker } : null}
+          />
         </div>
 
         <div hidden={route.tab !== 'calendar'}>

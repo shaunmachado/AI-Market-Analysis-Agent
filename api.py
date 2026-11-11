@@ -16,15 +16,27 @@ Endpoints:
     GET  /api/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD   upcoming events (and past ones) between two dates
     POST /api/calendar/scan     update the events calendar now
     GET  /api/calendar/scan     the calendar update in progress, or the last one
+    GET  /api/watchlist         tracked stocks, main ones first, with latest figures and next event
+    GET  /api/stocks/search?q=  find US stocks and ETFs by name or ticker (Yahoo Finance)
+    POST /api/watchlist                   track a stock: {"ticker": "COST", "main": false}
+    POST /api/watchlist/{TICKER}          star or unstar it: {"main": true}
+    POST /api/watchlist/{TICKER}/remove   stop tracking it
+    GET  /api/followups?horizon=1|5|20&ticker=   flagged moves and what the price did after them
+    POST /api/followups/refresh  fill in follow-through prices now (Yahoo only, free)
+    GET  /api/stories?ticker=    story updates (what later news said), and recent moves to check
+    POST /api/stories/check      re-check one move's news now: {"session_date": "2026-10-13", "ticker": "MSFT"}
     GET  /api/events            live updates (Server-Sent Events)
     GET  /api/runs/current      the on-demand run in progress, or the last one
     POST /api/runs              write a fresh report now
     POST /api/ask               ask Claude about saved reports (streams the answer)
 
 Reports are only read here, through a read-only database connection. The one
-thing that writes reports is a run, through run_brief.py's normal storage rules.
-The events calendar is written the same way, by events.py's scan (daily at the
-market open, or "Update now").
+thing that writes reports is a run, through run_brief.py's normal storage rules
+(a run also logs the Discord alerts it sends). The events calendar is written the same
+way, by events.py's scan (daily at the market open, or "Update now"). The Stocks tab edits
+watchlist.txt, through watchlist.py's safe edits. Follow-through and story updates are written
+by followups.py and stories.py (after each final report, or "Refresh prices" and "Check for updates").
+The API does write the search index (search.db), which is rebuilt from reports.db.
 If frontend/dist exists (after `npm run build`), the app is served at /.
 """
 
@@ -48,12 +60,14 @@ from starlette.staticfiles import StaticFiles
 
 import alerts
 import ask
+import followups
 import market_tools
 import events as upcoming  # events.py ("events" here is the live-updates endpoint)
 import prices
 import reports_db
 import run_brief
 import search_index
+import stories
 import watchlist
 
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -69,6 +83,9 @@ AUTO_CLOSE_TIME = os.environ.get("AUTO_CLOSE_TIME", "16:15")              # East
 AUTO_CLOSE_CHECK_SECONDS = float(os.environ.get("AUTO_CLOSE_CHECK_SECONDS", "30"))
 AUTO_CLOSE_RETRY_SECONDS = 15 * 60
 AUTO_CLOSE_MAX_ATTEMPTS = 3
+FOLLOWUP_REFRESH_COOLDOWN_SECONDS = int(os.environ.get("FOLLOWUP_REFRESH_COOLDOWN_SECONDS", "60"))
+STORY_CHECK_COOLDOWN_SECONDS = int(os.environ.get("STORY_CHECK_COOLDOWN_SECONDS", "30"))  # each check can cost a few cents
+STORY_DAYS = 30                                                           # recent moves offered for a news check
 MAX_ACTIVE_QUESTIONS = 2
 FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 
@@ -436,6 +453,20 @@ def _latest_calendar_scan() -> dict | None:
     return {k: scanned[k] for k in ("id", "status", "finished_at")} if scanned else None
 
 
+def _latest_followups() -> tuple:
+    """The latest follow-through update and story check, from any program (scheduled runs included)."""
+    with _db() as conn:
+        try:
+            update = conn.execute("SELECT MAX(id) FROM followup_updates").fetchone()[0]
+        except Exception:  # not set up yet
+            update = None
+        try:
+            checked = conn.execute("SELECT MAX(id) FROM story_checks WHERE finished_at IS NOT NULL").fetchone()[0]
+        except Exception:
+            checked = None
+    return update, checked
+
+
 def _latest_change() -> dict | None:
     """The most recently saved report: changes whenever any run saves (scheduled or on demand)."""
     with _db() as conn:
@@ -453,15 +484,21 @@ async def watch_reports() -> None:
             return None
 
     def check():  # all in one trip to a worker thread
-        return _latest_change(), _latest_calendar_scan(), watchlist_stamp()
+        return _latest_change(), _latest_calendar_scan(), watchlist_stamp(), _latest_followups()
 
-    last, last_scan, last_stamp = await asyncio.to_thread(check)
+    last, last_scan, last_stamp, last_followed = await asyncio.to_thread(check)
     while True:
         await asyncio.sleep(POLL_SECONDS)
         try:
-            current, scan, stamp = await asyncio.to_thread(check)
+            current, scan, stamp, followed = await asyncio.to_thread(check)
         except Exception:  # e.g. the database is briefly locked; try again next time
             continue
+        if followed != last_followed:  # follow-through updated, or a story checked
+            if followed[0] != last_followed[0]:
+                hub.publish({"type": "followups_updated"})
+            if followed[1] != last_followed[1]:
+                hub.publish({"type": "story_checked"})
+            last_followed = followed
         if current and current != last:
             last = current
             hub.publish({"type": "report_saved", **current})
@@ -644,6 +681,140 @@ def current_calendar_scan(request):
     return JSONResponse({"scan": calendar_scans.snapshot()})
 
 
+# ---------------------------------------------------------------------------
+# Follow-through (the price after flagged moves) and story updates (the news since)
+# ---------------------------------------------------------------------------
+
+class BackgroundJob:
+    """One job of a kind at a time, run in a worker thread, with a cooldown: refreshing
+    follow-through prices, and checking a story's news. Progress goes out as live updates."""
+
+    def __init__(self, event_type: str, cooldown, busy: str, too_soon: str):
+        self.event_type, self.cooldown, self.busy, self.too_soon = event_type, cooldown, busy, too_soon
+        self.task, self.last_started = None, None
+        self.state = {"state": "idle", "started_at": None, "finished_at": None, "message": None,
+                      "target": None, "result": None, "error": None}
+
+    def snapshot(self) -> dict:
+        return dict(self.state)
+
+    def start(self, work, target=None) -> dict:
+        """work(emit) runs in a thread; what it returns becomes the job's result."""
+        if self.task and not self.task.done():
+            raise AlreadyRunning(self.busy)
+        if self.last_started is not None:
+            wait = self.cooldown() - (time.monotonic() - self.last_started)
+            if wait > 0:
+                seconds = int(wait) + 1
+                raise TooSoon(self.too_soon.format(f"{seconds} second{'s' if seconds != 1 else ''}"))
+        self.last_started = time.monotonic()
+        self.state = {"state": "running", "started_at": _utc_now(), "finished_at": None, "message": "Starting…",
+                      "target": target, "result": None, "error": None}
+        hub.publish({"type": self.event_type, "job": self.snapshot()})
+        self.task = asyncio.create_task(self._run(work))
+        return self.snapshot()
+
+    def _progress(self, event: dict) -> None:
+        if event.get("type") == "progress":
+            self.state["message"] = event["message"]
+            hub.publish({"type": self.event_type, "job": self.snapshot()})
+
+    async def _run(self, work) -> None:
+        loop = asyncio.get_running_loop()
+        emit = lambda event: loop.call_soon_threadsafe(self._progress, event)  # noqa: E731  (work runs in a thread)
+        try:
+            self.state.update(state="finished", result=await asyncio.to_thread(work, emit), message=None)
+        except Exception as e:
+            self.state.update(state="failed", error=str(e) or type(e).__name__, message=None)
+        self.state["finished_at"] = _utc_now()
+        hub.publish({"type": self.event_type, "job": self.snapshot()})
+
+
+followup_refreshes = BackgroundJob("followups_refresh", lambda: FOLLOWUP_REFRESH_COOLDOWN_SECONDS,
+                                   "Prices are already being refreshed.",
+                                   "Prices were just refreshed. Try again in {}.")
+story_checks = BackgroundJob("story_check", lambda: STORY_CHECK_COOLDOWN_SECONDS,
+                             "A story is already being checked. Its progress is shown on the Story updates tab.",
+                             "A story was just checked. Try again in {}.")
+
+
+def _followups_view(horizon: int, ticker: str | None) -> dict:
+    with _db() as conn:
+        every = followups.moves(conn)
+        updated = followups.last_update(conn)
+    return {"horizon": horizon, "horizons": list(followups.HORIZONS),
+            "moves": [m for m in every if not ticker or m["ticker"] == ticker.upper()],
+            "tickers": sorted({m["ticker"] for m in every}), "patterns": followups.patterns(every, horizon),
+            "updated": updated, "refresh": followup_refreshes.snapshot()}
+
+
+async def followups_view(request):
+    raw = request.query_params.get("horizon", str(followups.SURPRISE_HORIZON))
+    ticker = request.query_params.get("ticker") or None
+    if not raw.isdigit() or int(raw) not in followups.HORIZONS:
+        return _error(400, f"horizon must be one of: {', '.join(map(str, followups.HORIZONS))}")
+    if ticker and not TICKER.fullmatch(ticker):
+        return _error(400, "invalid ticker")
+    return JSONResponse(await asyncio.to_thread(_followups_view, int(raw), ticker))
+
+
+async def refresh_followups(request):
+    if blocked := _post_guard(request):
+        return blocked
+    try:
+        job = followup_refreshes.start(lambda emit: followups.update("manual", emit))
+    except AlreadyRunning as e:
+        return _error(409, str(e))
+    except TooSoon as e:
+        return _error(429, str(e))
+    return JSONResponse({"refresh": job}, status_code=202)
+
+
+def _stories_view(ticker: str | None) -> dict:
+    since = (upcoming.today_et() - timedelta(days=STORY_DAYS)).isoformat()
+    with _db() as conn:
+        found = stories.latest(conn, ticker)
+        todo = stories.unchecked(conn, since)
+    return {"checks": found, "unchecked": [m for m in todo if not ticker or m["ticker"] == ticker.upper()],
+            "days": STORY_DAYS, "check": story_checks.snapshot(), "max_cost_usd": stories.CHECK_BUDGET_USD}
+
+
+async def stories_view(request):
+    ticker = request.query_params.get("ticker") or None
+    if ticker and not TICKER.fullmatch(ticker):
+        return _error(400, "invalid ticker")
+    return JSONResponse(await asyncio.to_thread(_stories_view, ticker))
+
+
+async def check_story(request):
+    if blocked := _post_guard(request):
+        return blocked
+    try:
+        body = await request.json()
+    except ValueError:
+        return _error(400, 'send JSON like {"session_date": "2026-10-13", "ticker": "MSFT"}')
+    day = body.get("session_date") if isinstance(body, dict) else None
+    ticker = body.get("ticker") if isinstance(body, dict) else None
+    if not isinstance(day, str) or not DATE.fullmatch(day) or not isinstance(ticker, str) or not TICKER.fullmatch(ticker):
+        return _error(400, 'send JSON like {"session_date": "2026-10-13", "ticker": "MSFT"}')
+    ticker = ticker.upper()
+    with _db() as conn:  # a quick check first, so a wrong move is refused straight away
+        try:
+            known = conn.execute("SELECT 1 FROM followups WHERE session_date = ? AND ticker = ?", (day, ticker)).fetchone()
+        except Exception:
+            known = None
+    if not known:
+        return _error(404, f"{ticker} wasn't flagged in the final report of {day}.")
+    try:
+        job = story_checks.start(lambda emit: stories.check(day, ticker, "manual", emit),
+                                 target={"session_date": day, "ticker": ticker})
+    except AlreadyRunning as e:
+        return _error(409, str(e))
+    except TooSoon as e:
+        return _error(429, str(e))
+    return JSONResponse({"check": job}, status_code=202)
+
+
 active_questions = 0
 
 
@@ -769,6 +940,10 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> Starlette:
         Route("/api/watchlist/{ticker}", star_stock, methods=["POST"]),
         Route("/api/watchlist/{ticker}/remove", remove_stock, methods=["POST"]),
         Route("/api/stocks/search", search_stocks),
+        Route("/api/followups", followups_view, methods=["GET"]),
+        Route("/api/followups/refresh", refresh_followups, methods=["POST"]),
+        Route("/api/stories", stories_view, methods=["GET"]),
+        Route("/api/stories/check", check_story, methods=["POST"]),
         Route("/api/events", events),
         Route("/api/runs", start_run, methods=["POST"]),
         Route("/api/runs/current", current_run),

@@ -46,6 +46,16 @@ export const removeStock = (ticker) => post(`/api/watchlist/${encodeURIComponent
 
 export const getCalendar = (start, end) => request(`/api/calendar?start=${start}&end=${end}`)
 
+// Follow-through: what the price did 1, 5 or 20 trading days after each flagged move
+export const getFollowups = (horizon, ticker) =>
+  request(`/api/followups?horizon=${horizon}${ticker ? `&ticker=${encodeURIComponent(ticker)}` : ''}`)
+export const refreshFollowups = () => post('/api/followups/refresh', {}).then((body) => body.refresh)
+
+// Story updates: what the news has said since a flagged move
+export const getStories = (ticker) => request(`/api/stories${ticker ? `?ticker=${encodeURIComponent(ticker)}` : ''}`)
+export const checkStory = (sessionDate, ticker) =>
+  post('/api/stories/check', { session_date: sessionDate, ticker }).then((body) => body.check)
+
 export async function startCalendarScan() {
   const response = await postJSON('/api/calendar/scan', {})
   const body = await response.json().catch(() => ({}))

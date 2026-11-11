@@ -10,7 +10,8 @@ Works at any time of day:
   recent sessions, so a partial day is never treated as a full one.
 
 upcoming_events reads the events calendar (events.py) from the reports database, so
-briefs can say what's coming up.
+briefs can say what's coming up. past_moves reads the follow-through of earlier flagged
+moves (followups.py), so briefs can say how similar moves played out.
 
 Every flagged move also comes with sector and market context: how the ticker did
 against its sector ETF and the S&P 500, and whether that gap was unusual. That
@@ -496,6 +497,29 @@ def upcoming_events(ticker: str = "", days: int = 14) -> dict:
               "events": rows, "this_week": [r["line"] for r in rows if r["days_away"] <= 7]}
     if not scanned:
         result["note"] = "The events calendar hasn't been filled in yet, so upcoming events aren't known."
+    return result
+
+
+@mcp.tool()
+def past_moves(tickers: list[str], kinds: list[str] | None = None) -> dict:
+    """How earlier flagged moves played out a week later (held, faded or reversed), for the
+    "Worth watching" line. Give it the flagged tickers, and each one's `context.read` as `kinds`
+    in the same order. For each ticker: its own past flagged moves, moves of the same kind across
+    the watchlist, the latest story update, and `summary`, a ready-made sentence to use only when
+    `worth_mentioning` is true.
+    """
+    import followups  # imported here, not at the top, because followups.py imports this module
+    kinds = list(kinds or [])
+    wanted = [t.strip().upper() for t in tickers if t.strip()][:30]
+    try:
+        with closing(reports_db.connect(readonly=True)) as conn:
+            found = {t: followups.past_for(conn, t, kinds[i] if i < len(kinds) else None) for i, t in enumerate(wanted)}
+            known = followups.last_update(conn)
+    except Exception as e:  # no database yet, or it's busy: the brief just goes without
+        return {"moves": {}, "note": f"Past moves aren't available ({e})."}
+    result = {"horizon_days": followups.SURPRISE_HORIZON, "moves": found}
+    if not known:
+        result["note"] = "Follow-through hasn't been worked out yet, so there's nothing to compare with."
     return result
 
 

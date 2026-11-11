@@ -4,12 +4,12 @@ A separate test environment with **two months of sample reports**, so you can se
 
 It runs your **real program's code** against its **own sample database**. Claude, market data, Voyage AI (for search), Discord (for alerts) and the events calendar's sources are simulated by default, so it costs nothing, needs no internet and never posts to your channel. It lives in its own folder next to `market-agent/` and **never writes anything into your program's folder**. An automated test checks this every time.
 
-This builds on `market-agent-stocks.md`. Your program should include everything up to that guide: the Previous days tab, charts, search, sector and market context, Discord alerts, the events calendar connected to briefs, alerts and Ask, and finding and tracking stocks.
+This builds on `market-agent-followups.md`. Your program should include everything up to that guide: the Previous days tab, charts, search, sector and market context, Discord alerts, the events calendar connected to briefs, alerts and Ask, finding and tracking stocks, and follow-through and story updates.
 
 **Already set this up for an earlier version?**
 
 1. Replace `sample_market.py`, `testenv.py` and `test_testenv.py` with the appendix versions.
-2. Run `python testenv.py seed --reset`. This creates the test environment's **own watchlist**, `data/watchlist.txt`, so the Stocks tab never edits your real one, and saves prices for quiet stocks.
+2. Run `python testenv.py seed --reset`. This creates the test environment's **own watchlist**, `data/watchlist.txt`, so the Stocks tab never edits your real one, saves prices for quiet stocks, and works out two months of follow-through and story updates.
 3. Run `python testenv.py build-frontend`.
 
 ---
@@ -63,6 +63,7 @@ projects/
                                         ├── Voyage AI ──────▶ simulated (topic-based stand-in for search)
                                         ├── Discord ────────▶ simulated (written to data/alerts_outbox.jsonl)
                                         ├── events calendar ▶ simulated company calendars and news, read by a stand-in for Claude
+                                        ├── story updates ──▶ simulated later headlines, read by a stand-in for Claude
                                         ├── watchlist ──────▶ data/watchlist.txt (a copy; your real one is only read)
                                         └── stock search ───▶ simulated (a built-in list of US stocks and ETFs)
 ```
@@ -80,6 +81,7 @@ projects/
 | Discord alerts | Flag alerts and daily summaries by the real rules, written to a file (`python testenv.py alerts`), or sent to Discord with `--live-alerts` |
 | Events calendar | Two months of calendar history and the weeks ahead (earnings, ex-dividend dates and news events), the daily update (`python testenv.py events`) and **Update now**, all checked and saved by your real `events.py` |
 | Finding and tracking stocks | Search a built-in list of US stocks and ETFs offline; track, star and remove stocks in the test environment's own watchlist. A stock you add gets simulated prices and appears from the next run, as in real use |
+| Follow-through and story updates | Two months of follow-through worked out by your real `followups.py` over the simulated prices: 27 moves, 18 with all three figures, 12 surprises. Every surprise's story checked by your real `stories.py`, reading simulated later headlines with a free stand-in for Claude, or real Claude with `--live-stories`. **Refresh prices** and **Check for updates** work offline |
 | A year or more of history | `python testenv.py seed --reset --months 12` |
 
 ---
@@ -93,7 +95,7 @@ projects/
 | Changing your code | It only *reads* files in `market-agent/`. Python's cache folders (`__pycache__`) are switched off, so not even those get written. A test confirms every file in `market-agent/` is byte-for-byte unchanged. |
 | Changing your frontend build | The app is built into `market-agent-testenv/frontend-dist/`. Your `frontend/dist/` is never touched. (Vite may update its own cache inside `node_modules`, as it does on any build.) |
 | Clashing with the running app | The test app uses port **8100**. Your real API (8000) and dev server (5173) can run at the same time. |
-| Spending money | Claude, market data and Voyage are simulated unless you choose `--live-ask`, `--live-runs`, `--live-embeddings` or `--live-calendar`. (`--live-search` uses Yahoo's free search.) |
+| Spending money | Claude, market data and Voyage are simulated unless you choose `--live-ask`, `--live-runs`, `--live-embeddings`, `--live-calendar` or `--live-stories`. (`--live-search` uses Yahoo's free search.) |
 | Posting to your Discord | Alerts are written to `data/alerts_outbox.jsonl` instead, even if `DISCORD_WEBHOOK_URL` is set in your terminal. Only `serve --live-alerts` sends them. A test checks that no connection to Discord is made. |
 | Interfering with scheduled runs | Your cron or Task Scheduler entries aren't touched, and the test environment has no schedule of its own. |
 | Being set up in the wrong place | If the test folder is inside `market-agent/`, it refuses to run. |
@@ -104,7 +106,7 @@ projects/
 
 ## 3. Before you start
 
-- [ ] Your program includes everything up to `market-agent-stocks.md`, and its tests pass (`pytest -v` in `market-agent/` shows `241 passed, 3 skipped`)
+- [ ] Your program includes everything up to `market-agent-followups.md`, and its tests pass (`pytest -v` in `market-agent/` shows `276 passed, 3 skipped`)
 - [ ] You've run `npm install` in `market-agent/frontend` (from the frontend guide)
 - [ ] You know where your `market-agent` folder is. The test environment goes **next to it**, in the same parent folder
 
@@ -176,11 +178,12 @@ This takes a second or two. It prints a summary like this (for a run on 6 Novemb
                "next": ["2026-11-09 Microsoft: Court hearing in patent case", "2026-11-12 Microsoft: Regulator's decision on deal",
                         "2026-11-16 Apple: Court hearing in patent case", "2026-11-19 JPMorgan Chase: Investor day"]},
   "watchlist": {"file": ".../market-agent-testenv/data/watchlist.txt", "tracked": 5, "main": ["AAPL", "MSFT", "NVDA"],
-                "added_since_seeding": [], "removed_since_seeding": []}
+                "added_since_seeding": [], "removed_since_seeding": []},
+  "follow_through": {"moves": 27, "settled": 18, "surprises": 12, "story_updates": 12}
 }
 ```
 
-Your numbers will differ, because the sample ends on the day you run it and uses your watchlist. `kinds_of_move` counts the verdicts on flagged moves in final reports. `sector_move_days` are the days the sample gave one of your sectors a big move of its own. `calendar` counts events from the "today" of the sample onwards (`upcoming`) and before it (`past`), and lists the next few. `watchlist` is the test environment's own list: its main stocks, and any stocks added or removed on the Stocks tab since you seeded.
+Your numbers will differ, because the sample ends on the day you run it and uses your watchlist. `kinds_of_move` counts the verdicts on flagged moves in final reports. `sector_move_days` are the days the sample gave one of your sectors a big move of its own. `calendar` counts events from the "today" of the sample onwards (`upcoming`) and before it (`past`), and lists the next few. `watchlist` is the test environment's own list: its main stocks, and any stocks added or removed on the Stocks tab since you seeded. `follow_through` counts the moves followed up, those with all three figures (`settled`), the surprises, and the story updates.
 
 ### Step 5: Build the app into the test folder
 
@@ -216,7 +219,7 @@ In a second terminal (same folder, same Python environment):
 pytest -v
 ```
 
-Expect `29 passed`. The last test confirms your `market-agent/` folder is exactly as it was.
+Expect `33 passed`. The last test confirms your `market-agent/` folder is exactly as it was.
 
 ---
 
@@ -240,6 +243,8 @@ Expect `29 passed`. The last test confirms your `market-agent/` folder is exactl
 | **How reports were saved** | Through your real `save_report()`, following the real storage rules. Most days have intraday updates at 10:45 and 12:30, then a final report at 8:16 the next morning (or 4:30pm the same day), with timestamps to match. |
 | **Edge cases** | One day mid-range was never finalized and shows "Intraday (not finalized)". The latest day is left as a live intraday report if the range ends on a trading day. Early-close days say so in the brief. |
 | **Coming up** | Every sample brief ends with "Coming up": the next 7 days of earnings and ex-dividend dates, and news events announced by then, in your program's own line format. Simulated runs call `upcoming_events` like the real agent; the daily summary alert, offline Ask and the Today tab's card read the sample calendar through your real code |
+| **Follow-through** | Worked out when you seed, by your real `followups.py`, from the simulated closes after each move flagged in a final report. The sample's "latest close" is its latest finished day, so today's live day is never used |
+| **Story updates** | Most news-driven and earnings moves get a follow-up headline 2 to 6 days later ("Nvidia responds to last week's concerns"), from the same fictional publishers. Every surprise was checked when you seeded, as the final report a week after it would have done. The stand-in for Claude finds the follow-up headline if there is one ("Developed"), or says nothing newer is about the move ("No update"). Checks cost $0 |
 | **Marked as sample** | Every brief says "Sample data for the test environment: prices and news are simulated." |
 | **Repeatable** | The same settings always give identical data. Use `--seed` with any number for a different set. |
 | **Simulated cost** | Each report has a plausible Claude cost, so cost totals have data. No money is spent. |
@@ -344,6 +349,17 @@ Work through these with `python testenv.py serve` running. Run `python testenv.p
 - [ ] `python testenv.py status` lists the stocks you added under `added_since_seeding`. `python testenv.py seed --reset` keeps them and gives them two months of history
 - [ ] Your `market-agent/watchlist.txt` is unchanged throughout
 
+**Follow-through and story updates**
+
+- [ ] The Follow-through tab shows "12 held · 8 faded · 6 reversed" for all flagged moves a week later (with the sample ending 6 November), and 27 moves in the table. **A month later** shows only the moves old enough
+- [ ] Hovering a bar shows its count; **Only surprises** leaves 12 moves; the stock filter shows one stock's moves
+- [ ] **Refresh prices** shows "Prices updated"; pressing again straight away explains the wait
+- [ ] A move without a story: **Check news**, then **Check for updates** on Story updates. It gives "Developed", "No update" or "No newer news" at $0, and the move leaves "Moves you can check"
+- [ ] Automatic checks are labelled "automatically: a surprise (reversed within a week)" or "(kept going: as much again within a week)"
+- [ ] **Run update now** shows "Checking how past moves played out", and the brief's "Worth watching" line ends with "Past moves: …"
+- [ ] `python testenv.py finalize` in another terminal: the day's move appears on Follow-through without a reload
+- [ ] Ask "Why was AMZN flagged?": the answer says how its last move played out a week later (follow-through), and its latest story update
+
 **Scale**
 
 - [ ] `python testenv.py seed --reset --months 12` creates a year (about 250 trading days). Check that both tabs stay fast and **Load older days** pages through it all
@@ -391,6 +407,7 @@ Run every command from `market-agent-testenv/` with the Python environment activ
 | `--live-alerts` | Run update now sends real Discord alerts about the sample data (section 8) |
 | `--live-calendar` | The calendar's Update now uses real Yahoo Finance and Claude (section 8) |
 | `--live-search` | The Stocks tab searches and checks stocks with Yahoo Finance (free; section 8) |
+| `--live-stories` | Story updates' checks read real Yahoo news with real Claude (section 8) |
 
 **Settings:** set these before `serve` if you need them.
 
@@ -398,6 +415,7 @@ Run every command from `market-agent-testenv/` with the Python environment activ
 |---|---|---|
 | `RUN_COOLDOWN_SECONDS` | `15` | Wait between Run now presses (your real app uses 300) |
 | `CALENDAR_SCAN_COOLDOWN_SECONDS` | `15` | Wait between the calendar's Update now presses (your real app uses 300) |
+| `FOLLOWUP_REFRESH_COOLDOWN_SECONDS`, `STORY_CHECK_COOLDOWN_SECONDS` | `15` | Wait between **Refresh prices** presses, and between story checks (your real app uses 60 and 30) |
 | `REPORT_POLL_SECONDS` | `2` | How often the app checks for saves by other programs |
 | `MARKET_AGENT_DIR` | `../market-agent` | Where your program is |
 
@@ -447,6 +465,14 @@ python testenv.py serve --live-search      # needs internet; free
 
 The Stocks tab then searches Yahoo Finance and checks tickers with it, as your real app does. Stocks you add still go into the **test** watchlist, and their prices are simulated like the rest of the sample.
 
+**Real story checks:**
+
+```bash
+python testenv.py serve --live-stories     # needs ANTHROPIC_API_KEY and internet
+```
+
+**Check for updates** then reads Yahoo's real newest headlines for the stock and asks real Claude, saving into the **test** database. Each check costs a few cents (never more than $0.10). The sample's moves and explanations are fictional, so most real checks say "No update": this is for seeing how real headlines, verdicts and costs look. Automatic checks after `finalize` stay simulated.
+
 **Real agent runs:**
 
 ```bash
@@ -466,7 +492,7 @@ Seed with yesterday as the end date first. If the sample already has a report fo
 pytest -v
 ```
 
-Expect `29 passed`. They use temporary databases and watchlists, so they don't change your sample data.
+Expect `33 passed`. They use temporary databases and watchlists, so they don't change your sample data.
 
 | Test | Proves that |
 |---|---|
@@ -497,6 +523,10 @@ Expect `29 passed`. They use temporary databases and watchlists, so they don't c
 | `test_add_star_and_remove_stocks_in_the_test_environment` | Through your real API: adding Costco as main (with its earnings date straight away), its figures after the next run, its chart, the real rules for crypto, unknown tickers and doubles, unstar and remove, and the next report leaving it out. **Your `market-agent/watchlist.txt` is unchanged** |
 | `test_reseeding_gives_added_stocks_history` | `status` lists added stocks; `reset` keeps the test watchlist; reseeding gives an added stock all 44 days |
 | `test_added_stocks_leave_the_rest_of_the_sample_unchanged` | Adding stocks doesn't change any existing stock's prices, news days or flags, or the calendar's events; the same stock always gets the same prices |
+| `test_follow_through_over_two_months` | Every move flagged in a final report is followed up; moves 20 trading days old are settled; all three outcomes appear; every surprise was checked once, for free, with a link to its follow-up article |
+| `test_offline_refresh_and_story_check` | **Refresh prices** and **Check for updates** work offline through your real API, at $0 |
+| `test_offline_run_now_checks_past_moves_and_finalize_follows_up` | Run now calls `past_moves` and the brief mentions past moves; `finalize` follows up the new day's moves |
+| `test_offline_ask_knows_how_moves_played_out` | Offline Ask gives a stock's last move's follow-through and its latest story update, and the overall patterns for general questions |
 | `test_refuses_to_use_the_main_projects_database` | Pointing it at a database inside `market-agent/` is refused |
 | `test_main_project_was_not_touched` | **Every file in `market-agent/` is unchanged** after all of the above. No `__pycache__` folders were created, and no search index or alerts outbox was written there |
 
@@ -534,6 +564,7 @@ Expect `29 passed`. They use temporary databases and watchlists, so they don't c
 
   The earlier Today, Previous days, chart, search and alerts checks also still pass.
 - **Tracked stocks work in it.** In a browser over the sample, 13 checks passed with no browser errors: the Today tab's main stocks and "N more" note, the Stocks tab's groups and counts, offline search (Costco yes, Bitcoin no), Track as main with its earnings date, "Also flagged" after unstarring, the new stock's figures after Run update now, its chart and calendar link, Remove with Keep, a hand edit showing up live, phone width and dark mode. Your real `watchlist.txt` was unchanged afterwards, and every earlier browser check still passes.
+- **Follow-through and story updates work in it.** In a browser over the sample, 13 checks passed with no browser errors: the patterns and horizons, bar tooltips, the table's filters, a ticker's chart, Refresh prices and its cooldown, Check news through to an update, automatic checks labelled, the row linking to its update, past moves in a run's brief, Ask's follow-through lines, a `finalize` from another terminal appearing live, phone width and dark mode. Every earlier browser check still passes.
 - **Charts work in it.** The chart was driven in a browser over the sample data, covering markers, ranges, hover, keyboard, opening reports from markers, phone width and dark mode. Afterwards, the main project was again unchanged by the test environment.
 
 ---
@@ -551,6 +582,7 @@ Expect `29 passed`. They use temporary databases and watchlists, so they don't c
 | Change your real watchlist and want it here too | Delete `data/watchlist.txt`, then `python testenv.py seed --reset`. It copies your real list again |
 | Add stocks on the test Stocks tab and want them to have history | `python testenv.py seed --reset`. The test watchlist is kept |
 | Want "today" to match the real date | `python testenv.py seed --reset` |
+| Change how moves are judged (`followups.py`) or checked (`stories.py`) | `python testenv.py seed --reset`, so the follow-through and story updates are worked out again |
 | Have a live demo on GitHub Pages (`market-agent-demo.md`) | It makes its own copy of this sample. After changing your program, run `python demo.py build` then `python demo.py publish` in `market-agent-demo/` |
 | Add a feature that needs new sample data | Extend `sample_market.py` (for example, more event types) and add a check to `test_testenv.py` |
 
@@ -577,6 +609,7 @@ Run `pytest -v` in **both** folders after changes: the main project's tests chec
 | Search says "By keywords" with `--live-embeddings` | `VOYAGE_API_KEY` isn't set in that terminal, or `voyageai` isn't installed. Without `--live-embeddings`, the stand-in is used and it says "By meaning and keywords". |
 | `no such column: move_read` from `status` | The sample data is from before sector context. Run `python testenv.py seed --reset`. |
 | No "simulated Discord" note after `update` | Nothing new to alert: those tickers were already alerted today, or nothing is flagged. See `python testenv.py alerts`, or `seed --reset` to start again. |
+| The Follow-through tab is empty, or Story updates has none | The sample data is from before follow-through. Run `python testenv.py seed --reset`. |
 | The Calendar tab says "Not updated yet" | The sample data is from before the calendar. Run `python testenv.py seed --reset`. |
 | The Stocks tab doesn't match your real `watchlist.txt` | By design: the test environment has its own copy. To copy yours again, delete `data/watchlist.txt` and run `python testenv.py seed --reset`. |
 | A stock you added stays at "first report next run" | Press **Run update now** or run `python testenv.py update`. If the latest day is already final, `python testenv.py seed --reset` gives it history instead. |
@@ -717,6 +750,17 @@ UPCOMING = [
     ("regulator", "Regulator to rule on {name} deal by {when}",
      "A decision on the proposed acquisition is due on {when}, the regulator said."),
 ]
+# Later headlines about a move's story (fictional), for Story updates: by what caused the move
+STORY_FOLLOWUPS = {
+    ("earnings", 1): ("Analysts raise price targets on {name} after its quarterly results",
+                      "Several analysts raised their price targets, citing stronger guidance."),
+    ("earnings", -1): ("{name} outlines cost cuts after a weak quarter",
+                       "Management said it would cut costs after results missed expectations."),
+    ("news", 1): ("{name} follows up on last week's announcement with more detail",
+                  "The company gave more detail on the news that lifted its shares."),
+    ("news", -1): ("{name} responds to last week's concerns",
+                   "The company addressed the concerns that weighed on its shares last week."),
+}
 CATALYSTS = {
     ("earnings", 1): "Quarterly results beat expectations and guidance was raised.",
     ("earnings", -1): "Quarterly results missed expectations.",
@@ -1028,7 +1072,28 @@ class SampleMarket:
             "summary": text,
         }]
 
-    def brief(self, scan: dict, day: date) -> str:
+    def follow_up_article(self, ticker: str, day: date) -> dict | None:
+        """The later headline about one day's story, if it has one: most company-news and earnings
+        moves get one, published 2 to 6 days later. Some don't, so "no newer headlines" happens too."""
+        event = self.events.get((ticker, day))
+        if event not in STORY_FOLLOWUPS:
+            return None
+        n = zlib.crc32(f"later{ticker}{day}".encode())
+        if n % 4 == 0:
+            return None
+        published = day + timedelta(days=2 + n % 5)
+        title, summary = STORY_FOLLOWUPS[event]
+        return {"title": f"{ticker}: {title.format(name=SHORT_NAMES.get(ticker, ticker))}",
+                "publisher": PUBLISHERS[n % len(PUBLISHERS)], "published": f"{published}T14:00:00Z", "summary": summary,
+                "url": f"https://news.example.com/{published}/{ticker.lower()}-follow-up-{day}"}
+
+    def later_news(self, ticker: str, as_of: date) -> list[dict]:
+        """What get_news would return on a given day: the follow-up headlines of the last two months, newest first."""
+        found = [a for (t, d) in self.events if t == ticker and 0 < (as_of - d).days <= 62
+                 if (a := self.follow_up_article(t, d)) and a["published"][:10] <= as_of.isoformat()]
+        return sorted(found, key=lambda a: a["published"], reverse=True)[:10]
+
+    def brief(self, scan: dict, day: date, past: dict | None = None) -> str:
         """A brief in the same format as analyst_prompt.md asks the agent for."""
         session = scan["session"]
         intraday = session["status"] == "in_progress"
@@ -1056,7 +1121,9 @@ class SampleMarket:
                 lines.append(f"- **Likely why:** {news[0]['summary']} [{news[0]['publisher']}]({news[0]['url']})")
             else:
                 lines.append("- **Likely why:** No clear catalyst found.")
-            lines += ["- **Worth watching:** whether the move holds into the next session.", ""]
+            history = (past or {}).get(m["ticker"]) or {}
+            extra = f" Past moves: {history['summary']}." if history.get("worth_mentioning") and history.get("summary") else ""
+            lines += [f"- **Worth watching:** whether the move holds into the next session.{extra}", ""]
         quiet = ", ".join(f"{q['ticker']} ({q['return_1d_pct']:+.2f}%)" for q in scan["quiet"])
         lines += ["## Quiet", "", quiet or "None.", ""]
         lines += ["## Coming up", ""]
@@ -1200,6 +1267,10 @@ when you first seed. Finding, adding, starring and removing stocks on the Stocks
 copy, never the real one. Search finds stocks from a built-in list (no internet);
 `serve --live-search` uses Yahoo Finance's real search. A stock you add is simulated from the
 next run on, like real use; `seed --reset` gives it two months of history too.
+
+Follow-through (the price after each flagged move) uses the simulated prices, and Story updates
+read simulated later headlines with a stand-in for Claude. `serve --live-stories` checks stories
+with real Yahoo news and Claude instead.
 """
 
 import argparse
@@ -1564,6 +1635,9 @@ def seed_database(db_path: Path = DB_PATH, end: date | None = None, months: int 
             _save(reports_db, conn, market, day, market.scan(day), "final", finalized, rng.uniform(0.03, 0.06))
     update_search_index(db_path)
     seed_events(db_path, market)
+    for _ in range(10):  # each surprise checked, as the final report a week after it would have done
+        if not follow_up(db_path, every_surprise=True)["checks"]:
+            break
     return status_summary(db_path)
 
 
@@ -1594,6 +1668,13 @@ def status_summary(db_path: Path = DB_PATH) -> dict:
     upcoming = [e for e in on_calendar if e["event_date"] >= market.end.isoformat()]
     import watchlist
     tracked = watchlist.entries()
+    import followups
+    with closing(reports_db.connect(db_path, readonly=True)) as conn:
+        followed = followups.moves(conn)
+        try:
+            story_count = conn.execute("SELECT COUNT(*) FROM story_checks WHERE status != 'running'").fetchone()[0]
+        except Exception:
+            story_count = 0
     return {"database": str(Path(db_path).resolve()), "main_project": str(MAIN), "days": row["days"],
             "first_day": row["first"], "last_day": row["last"], "final": row["final"],
             "intraday": intraday, "flagged_rows": flagged, "simulated_cost_usd": row["cost"],
@@ -1606,7 +1687,9 @@ def status_summary(db_path: Path = DB_PATH) -> dict:
             "watchlist": {"file": str(watchlist_path(db_path)), "tracked": len(tracked),
                           "main": [e["ticker"] for e in tracked if e["main"]],
                           "added_since_seeding": market.added,
-                          "removed_since_seeding": [t for t in market.tickers if t not in market.watching]}}
+                          "removed_since_seeding": [t for t in market.tickers if t not in market.watching]},
+            "follow_through": {"moves": len(followed), "settled": sum(m["settled"] for m in followed),
+                               "surprises": sum(m["surprise"] for m in followed), "story_updates": story_count}}
 
 
 # ---------------------------------------------------------------------------
@@ -1649,7 +1732,12 @@ def simulate_finalize(db_path: Path = DB_PATH) -> str:
     with closing(reports_db.connect(db_path)) as conn:
         outcome = _save(reports_db, conn, market, day, market.scan(day), "final", datetime.now(timezone.utc), 0.0)
     update_search_index(db_path)
-    return f"{outcome}: final report for {day}" + simulated_alerts(day, db_path)
+    alerted = simulated_alerts(day, db_path)
+    followed = follow_up(db_path)  # as a real final run does, after its alerts
+    f = followed["followups"] or {}
+    note = (f" · follow-through: {f['added']} new, {f['updated']} updated, {len(followed['checks'])} story checks"
+            if f else "")
+    return f"{outcome}: final report for {day}{note}{alerted}"
 
 
 def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) -> None:
@@ -1681,6 +1769,16 @@ def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) ->
                                model="offline-test")
         await asyncio.sleep(0.2)
         yield UserMessage(content=[ToolResultBlock(tool_use_id="calendar", content=text({"this_week": scan["coming_up"]}))])
+        past = {}
+        if scan["flagged"]:
+            import market_tools  # the real tool, reading the sample database
+            ask_for = {"tickers": [m["ticker"] for m in scan["flagged"]], "kinds": [m["context"].get("read") for m in scan["flagged"]]}
+            yield AssistantMessage(content=[ToolUseBlock(id="past", name="mcp__market__past_moves", input=ask_for)],
+                                   model="offline-test")
+            past_result = market_tools.past_moves(**ask_for)
+            past = past_result.get("moves", {})
+            await asyncio.sleep(0.2)
+            yield UserMessage(content=[ToolResultBlock(tool_use_id="past", content=text(past_result))])
         for i, m in enumerate(scan["flagged"]):
             yield AssistantMessage(content=[ToolUseBlock(id=f"news{i}", name="mcp__market__get_news",
                                                          input={"ticker": m["ticker"]})], model="offline-test")
@@ -1689,7 +1787,7 @@ def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) ->
             yield UserMessage(content=[ToolResultBlock(tool_use_id=f"news{i}",
                                                        content=[part for n in news for part in text(n)])])
         yield ResultMessage(subtype="success", duration_ms=0, duration_api_ms=0, is_error=False, num_turns=2,
-                            session_id="offline-test", total_cost_usd=0.0, result=market.brief(scan, day))
+                            session_id="offline-test", total_cost_usd=0.0, result=market.brief(scan, day, past))
 
     run_brief.market_session = fake_market_session
     run_brief.query = fake_agent
@@ -1712,6 +1810,18 @@ def offline_answer(reports_db, ask, question: str, db_path: Path = DB_PATH) -> s
             ahead = events.upcoming(conn, events.today_et(), ask.CALENDAR_DAYS, [t])
             if ahead:
                 lines.append(f"  Next on the calendar: {events.event_line(ahead[0], company=False)} (calendar).")
+            import followups
+            import stories
+            judged = [m for m in followups.moves(conn, t) if m["outcomes"]["5"]]
+            if judged:
+                m = judged[0]
+                lines.append(f"  After its last judged move ({m['session_date']}, {m['move_pct']:+.2f}%): "
+                             f"{m['outcomes']['5']} a week later ({m['after_5d']:+.2f}%) (follow-through).")
+            checked = [c for c in stories.latest(conn, t, 5) if c["status"] in ("ok", "no_news")]
+            if checked:
+                c = checked[0]
+                lines.append(f"  Latest story update, on its move of {c['session_date']}: {c['verdict_label']}. "
+                             f"{c['update_text']} (story update, {c['finished_at'][:10]}).")
         if not tickers:
             top = conn.execute("""SELECT ticker, COUNT(*) FROM report_tickers WHERE category = 'flagged'
                                   GROUP BY ticker ORDER BY COUNT(*) DESC, ticker LIMIT 3""").fetchall()
@@ -1721,6 +1831,11 @@ def offline_answer(reports_db, ask, question: str, db_path: Path = DB_PATH) -> s
             ahead = events.upcoming(conn, events.today_et(), 7)
             if ahead:
                 lines += ["", "Next on the calendar (calendar):"] + [f"- {events.event_line(e)}" for e in ahead[:3]]
+            import followups
+            found = followups.moves(conn)
+            if found:
+                lines += ["", "How flagged moves played out (follow-through): "
+                          + followups.describe_group(followups.patterns(found, 5)["all"], 5) + "."]
     # The retrieval step real answers are built on: the passages that best match the question
     passages = ask.find_passages(question)[:3]
     if passages:
@@ -1766,6 +1881,50 @@ def install_fake_search(watchlist) -> None:
     watchlist._search_cache.clear()
 
 
+def install_fake_followups(followups, stories, reports_db, market, db_path: Path = DB_PATH, live_stories: bool = False) -> None:
+    """Follow-through over the simulated prices, and Story updates from simulated later headlines,
+    read by a free stand-in for Claude. Your real followups.py and stories.py do everything else."""
+    import re
+
+    def last_complete_session():  # the sample's latest finished day
+        with closing(reports_db.connect(db_path, readonly=True)) as conn:
+            row = conn.execute("SELECT status FROM reports WHERE session_date = ?", (market.days[-1].isoformat(),)).fetchone()
+        return market.days[-1] if row and row["status"] == "final" else market.days[-2]
+
+    def fake_claude(prompt):
+        """Finds the newer headline that follows up this move's story, as Claude would."""
+        ticker = re.search(r"^STOCK: (\S+)$", prompt, re.M).group(1)
+        moved = date.fromisoformat(re.search(r"^MOVE: .* on (\d{4}-\d{2}-\d{2}) ", prompt, re.M).group(1))
+        story = market.follow_up_article(ticker, moved)
+        later = re.findall(r"^\[(\d+)\] (.*?) \| published (\S+)\n    (.*)$", prompt, re.M)
+        about = [x for x in later if story and x[3] == story["title"] and x[2] == story["published"]]
+        if not about:
+            return json.dumps({"verdict": "no_update", "update": "None of the newer headlines is about this move.",
+                               "sources": []}), 0.0
+        n, publisher, published, title = about[0]
+        update = f"On {published[:10]}, {publisher} reported: {title.split(': ', 1)[-1]}."
+        return json.dumps({"verdict": "developed", "update": update, "sources": [int(n)]}), 0.0
+
+    followups.last_complete_session = last_complete_session
+    if not live_stories:
+        stories.fetch_news = lambda ticker: market.later_news(ticker, market.end)
+        stories.ask_claude = fake_claude
+
+
+def follow_up(db_path: Path = DB_PATH, every_surprise: bool = False) -> dict:
+    """What happens after each final report: follow-through filled in, and surprises' news checked.
+    `every_surprise`: also the sample's older surprises, which real use would have checked in their own week."""
+    reports_db, market = connect_main(db_path), load_market(db_path)
+    import events
+    import followups
+    import prices
+    import stories
+    install_fake_events(events, market)
+    install_fake_prices(prices, reports_db, market, db_path)
+    install_fake_followups(followups, stories, reports_db, market, db_path)
+    return stories.after_final_report(within_days=10_000 if every_surprise else None)
+
+
 def install_fake_ask(ask, reports_db, db_path: Path = DB_PATH) -> None:
     """Make "Ask" answer from the sample data without calling Claude."""
     from claude_agent_sdk import ResultMessage, StreamEvent
@@ -1788,7 +1947,7 @@ def install_fake_ask(ask, reports_db, db_path: Path = DB_PATH) -> None:
 
 def make_app(db_path: Path = DB_PATH, live_ask: bool = False, live_runs: bool = False,
              live_embeddings: bool = False, live_alerts: bool = False, live_calendar: bool = False,
-             live_search: bool = False, frontend_dist: Path = FRONTEND_DIST):
+             live_search: bool = False, live_stories: bool = False, frontend_dist: Path = FRONTEND_DIST):
     reports_db = connect_main(db_path)
     market = load_market(db_path)
     import alerts
@@ -1797,10 +1956,15 @@ def make_app(db_path: Path = DB_PATH, live_ask: bool = False, live_runs: bool = 
     import events
     import prices
     import run_brief
+    import followups
     import search_index
+    import stories
     import watchlist
     if not live_search:
         install_fake_search(watchlist)
+    install_fake_followups(followups, stories, reports_db, market, db_path, live_stories)
+    api.FOLLOWUP_REFRESH_COOLDOWN_SECONDS = int(os.environ.get("FOLLOWUP_REFRESH_COOLDOWN_SECONDS", "15"))
+    api.STORY_CHECK_COOLDOWN_SECONDS = int(os.environ.get("STORY_CHECK_COOLDOWN_SECONDS", "15"))
     if not live_embeddings:
         install_fake_embeddings(search_index)
     if not live_alerts:
@@ -1866,6 +2030,8 @@ def main() -> None:
                        help="the calendar's Update now uses real Yahoo Finance and Claude (costs money; saves into the test database)")
     serve.add_argument("--live-search", action="store_true",
                        help="find stocks with Yahoo Finance's real search (free; still edits only the test watchlist)")
+    serve.add_argument("--live-stories", action="store_true",
+                       help="Story updates' checks read real Yahoo news with real Claude (costs a few cents each)")
     commands.add_parser("update", help="simulate a scheduled intraday run")
     commands.add_parser("finalize", help="simulate the run that writes the latest day's final report")
     commands.add_parser("events", help="simulate the daily events-calendar update")
@@ -1891,8 +2057,9 @@ def main() -> None:
         if not DB_PATH.exists():
             sys.exit("No sample data yet. Run: python testenv.py seed")
         app = make_app(live_ask=args.live_ask, live_runs=args.live_runs, live_embeddings=args.live_embeddings,
-                       live_alerts=args.live_alerts, live_calendar=args.live_calendar, live_search=args.live_search)
-        live = [name for name, on in (("Claude", args.live_ask or args.live_runs or args.live_calendar),
+                       live_alerts=args.live_alerts, live_calendar=args.live_calendar, live_search=args.live_search,
+                       live_stories=args.live_stories)
+        live = [name for name, on in (("Claude", args.live_ask or args.live_runs or args.live_calendar or args.live_stories),
                                       ("Voyage", args.live_embeddings), ("Discord", args.live_alerts),
                                       ("Yahoo search", args.live_search)) if on]
         mode = f"LIVE {' + '.join(live)}" if live else "offline (no Claude, no Voyage, no Discord, no cost)"
@@ -1928,6 +2095,7 @@ main project is never touched. Run from this folder:  pytest -v
 """
 
 import hashlib
+import json
 import sqlite3
 import sys
 import time
@@ -2420,6 +2588,81 @@ def test_added_stocks_leave_the_rest_of_the_sample_unchanged():
     again = SampleMarket(TICKERS, END)
     again.add_ticker("COST")
     assert (again.closes["COST"] == after.closes["COST"]).all() and after.sector["COST"] == "XLP"
+
+
+# ---------------------------------------------------------------------------
+# Follow-through and story updates
+# ---------------------------------------------------------------------------
+
+def test_follow_through_over_two_months(db, conn):
+    assert testenv.status_summary(db)["follow_through"] == {"moves": 27, "settled": 18, "surprises": 12, "story_updates": 12}
+    import followups
+    import stories
+    moves = followups.moves(conn)
+    finals = conn.execute("""SELECT COUNT(*) FROM report_tickers t JOIN reports r USING (session_date)
+                             WHERE t.category = 'flagged' AND r.status = 'final'""").fetchone()[0]
+    assert len(moves) == finals  # every move flagged in a final report is followed up
+    assert all(m["settled"] == (m["session_date"] <= "2026-10-07") for m in moves)  # 20 trading days have passed
+    assert {m["outcomes"]["5"] for m in moves if m["outcomes"]["5"]} == {"held", "faded", "reversed"}
+    result = followups.patterns(moves, 5)
+    assert result["all"]["judged"] == sum(m["outcomes"]["5"] is not None for m in moves)
+    checks = stories.latest(conn)
+    assert {(c["session_date"], c["ticker"]) for c in checks} == {(m["session_date"], m["ticker"]) for m in moves if m["surprise"]}
+    assert all(c["trigger"] == "surprise" and c["cost_usd"] == 0 for c in checks)  # every surprise, checked once, for free
+    assert {c["status"] for c in checks} == {"ok", "no_news"}
+    developed = next(c for c in checks if c["verdict"] == "developed")
+    assert developed["sources"][0]["url"].startswith("https://news.example.com/")
+
+
+def test_offline_refresh_and_story_check(fresh_db, client):
+    app = client(fresh_db)
+    started = app.post("/api/followups/refresh", json={})
+    assert started.status_code == 202
+    for _ in range(100):
+        if app.get("/api/followups").json()["refresh"]["state"] != "running":
+            break
+        time.sleep(0.05)
+    view = app.get("/api/followups?horizon=5").json()
+    assert view["refresh"]["state"] == "finished" and view["updated"]["trigger"] == "manual"
+
+    move = app.get("/api/stories").json()["unchecked"][0]
+    assert app.post("/api/stories/check", json={"session_date": move["session_date"], "ticker": move["ticker"]}).status_code == 202
+    for _ in range(100):
+        stories_now = app.get("/api/stories").json()
+        if stories_now["check"]["state"] != "running":
+            break
+        time.sleep(0.05)
+    newest = stories_now["checks"][0]
+    assert (newest["session_date"], newest["ticker"], newest["trigger"]) == (move["session_date"], move["ticker"], "manual")
+    assert newest["status"] in ("ok", "no_news") and newest["cost_usd"] == 0
+
+
+def test_offline_run_now_checks_past_moves_and_finalize_follows_up(fresh_db, client):
+    app = client(fresh_db)
+    app.post("/api/runs", json={})
+    run = wait_for_run(app)
+    tools = [e["tool"] for e in run["log"] if e["type"] == "tool_call"]
+    assert "mcp__market__past_moves" in tools
+    brief = app.get("/api/reports/latest").json()["body_md"]
+    assert "Past moves: MSFT's flagged moves:" in brief and "Stock-specific moves across the watchlist:" in brief
+
+    note = testenv.simulate_finalize(fresh_db)
+    assert " · follow-through: " in note
+    import followups
+    reports_db = testenv.connect_main(fresh_db)
+    with closing(reports_db.connect(fresh_db, readonly=True)) as c:
+        latest = [m for m in followups.moves(c) if m["session_date"] == "2026-11-06"]
+    assert latest and all(m["after_1d"] is None for m in latest)  # followed up, no later prices yet
+
+
+def test_offline_ask_knows_how_moves_played_out(db, client):
+    app = client(db)
+    response = app.post("/api/ask", json={"question": "Why was AMZN flagged?"})
+    done = json.loads([line for line in response.text.splitlines() if '"done"' in line][0])
+    assert "a week later" in done["answer"] and "(follow-through)" in done["answer"]
+    assert "(story update, " in done["answer"]
+    general = app.post("/api/ask", json={"question": "What moved the most this week?"}).text
+    assert "How flagged moves played out (follow-through): All flagged moves:" in general
 
 
 # ---------------------------------------------------------------------------

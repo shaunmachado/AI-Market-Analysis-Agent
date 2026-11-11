@@ -8,6 +8,7 @@ const STEP_NAMES = {
   compute_moves: (input) => `Checking ${input.ticker} in detail`,
   market_backdrop: () => 'Checking the market and sectors',
   upcoming_events: () => 'Checking the events calendar',
+  past_moves: () => 'Checking how past moves played out',
 }
 
 function describe(event) {

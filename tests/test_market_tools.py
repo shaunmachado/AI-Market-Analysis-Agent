@@ -583,7 +583,7 @@ def test_tools_work_through_mcp(fake_market):
 
     names, result = asyncio.run(run())
 
-    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events"}
+    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events", "past_moves"}
     assert not result.is_error
     payload = json.loads(result.content[0].text)  # the JSON text the agent receives
     assert payload["session"]["status"] == "complete"

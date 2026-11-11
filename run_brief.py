@@ -10,6 +10,9 @@ Auth: if MARKET_AGENT_ANTHROPIC_KEY is set (in .env or the environment), this
 script bills that API key. Otherwise it uses your Claude Code login (subscription).
 The key is handed only to the Claude process this script starts; a global
 ANTHROPIC_API_KEY is ignored, so your own Claude Code sessions keep using Pro.
+After saving, it sends any Discord alerts the report calls for (see alerts.py). After a final
+report, it also fills in the follow-through of earlier flagged moves (followups.py) and checks
+the news on any that turned out to be surprises (stories.py).
 
 Usage:
     claude login   # once, if you're not using an API key
@@ -49,6 +52,7 @@ from claude_agent_sdk import (  # noqa: E402
 import alerts  # noqa: E402
 import reports_db  # noqa: E402
 import search_index  # noqa: E402
+import stories  # noqa: E402
 from market_tools import flag_events, load_watchlist, market_session, now_et  # noqa: E402
 
 HERE = Path(__file__).parent
@@ -71,6 +75,7 @@ options = ClaudeAgentOptions(
         "mcp__market__compute_moves",
         "mcp__market__get_news",
         "mcp__market__upcoming_events",
+        "mcp__market__past_moves",
     ],
     max_turns=BASE_TURNS,    # each run uses turn_limit() instead (below)
     max_budget_usd=1.00,     # hard stop on cost per run
@@ -204,6 +209,8 @@ async def run_once(emit=None) -> dict:
         emit({"type": "warning", "message": f"Saved, but the search index wasn't updated ({e}). It will catch up later."})
 
     await send_alerts(session_date, emit)
+    if status == "final":  # once a day: what happened after earlier flagged moves (and news on any surprises)
+        await asyncio.to_thread(stories.after_final_report, emit)
     return event
 
 

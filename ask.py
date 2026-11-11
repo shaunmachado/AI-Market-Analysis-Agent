@@ -3,9 +3,11 @@
 For each question it gathers, within a size limit:
 1. Figures across days for any watchlist ticker named in the question.
 2. The events calendar: everything in the next 30 days, plus the last 30 days for named tickers.
-3. The passages from any report that best match the question, found by
+3. What happened after flagged moves (followups.py and stories.py): for named tickers, each
+   move's follow-through and story updates; otherwise, how moves of each kind played out.
+4. The passages from any report that best match the question, found by
    search_index.py (keywords plus meaning), so older reports are reachable.
-4. The 10 most recent reports in full, plus recent reports where a named ticker was flagged.
+5. The 10 most recent reports in full, plus recent reports where a named ticker was flagged.
 Claude is told to answer from that material alone and to cite report dates.
 """
 
@@ -17,9 +19,11 @@ from datetime import timedelta
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, StreamEvent, query
 
 import events
+import followups
 import reports_db
 import search_index
 from run_brief import AGENT_ENV  # same auth as the report runs: the project's API key, if set
+import stories
 
 SYSTEM_PROMPT = """You answer questions about the user's saved stock watchlist reports.
 
@@ -29,6 +33,9 @@ Rules:
 - Every number must come from the provided material. Never estimate or calculate new figures.
 - Intraday reports describe moves "so far" that day, and those figures may have changed since.
 - Dated events come from the events calendar: cite them as (calendar), and say so when a date isn't confirmed.
+- Follow-through figures say what a stock's price did after a flagged move: cite them as (follow-through).
+  Story updates say what later news added: cite them as (story update, then the date it was checked).
+  Both are history, never a forecast.
 - This is research, not investment advice. Never recommend buying or selling.
 - Keep answers short: a few sentences or a short list, in markdown."""
 
@@ -37,6 +44,8 @@ RECENT_REPORTS = 10              # always included in full
 FLAGGED_REPORTS_PER_TICKER = 10  # recent reports for each ticker named in the question
 PASSAGES = 8                     # best-matching passages from any report (the retrieval step)
 CALENDAR_DAYS = 30               # events calendar: this far ahead (all tickers) and back (named tickers)
+FOLLOWUP_MOVES = 10              # flagged moves' follow-through per named ticker
+STORY_UPDATES = 3                # latest story updates per named ticker
 MAX_CONTEXT_CHARS = 60_000       # keeps each question's cost predictable
 
 options = ClaudeAgentOptions(
@@ -82,6 +91,41 @@ def calendar_section(conn, tickers: list[str]) -> str:
     return "\n".join(lines)
 
 
+def followup_section(conn, tickers: list[str]) -> str:
+    """What happened after flagged moves: each named ticker's moves and story updates, or, with no
+    ticker named, how moves of each kind played out a week later."""
+    horizon = followups.SURPRISE_HORIZON
+    if not tickers:
+        found = followups.moves(conn)
+        if not found:
+            return ""
+        result = followups.patterns(found, horizon)
+        lines = ["## How flagged moves played out a week later (all stocks; cite as (follow-through))", ""]
+        lines += [f"- {followups.describe_group(g, horizon)}" for g in
+                  [result["all"], *result["by_kind"], *result["by_reason"], *result["by_direction"]]]
+        return "\n".join(lines)
+    parts = []
+    for ticker in tickers:
+        found = followups.moves(conn, ticker)[:FOLLOWUP_MOVES]
+        if found:
+            lines = [f"## Follow-through for {ticker}: the price after each flagged move (cite as (follow-through))",
+                     "day of the move | move % | kind | reason | 1 day later % | 1 week later % | 1 month later % | after a week"]
+            for m in found:
+                after = " | ".join("" if m[f"after_{n}d"] is None else f"{m[f'after_{n}d']:+.2f}" for n in followups.HORIZONS)
+                lines.append(f"{m['session_date']} | {m['move_pct']:+.2f} | {m['kind']} | {m['reason_label']} | {after} | "
+                             f"{m['outcomes'][str(horizon)] or 'not known yet'}")
+            parts.append("\n".join(lines))
+        checks = [c for c in stories.latest(conn, ticker, STORY_UPDATES) if c["status"] in ("ok", "no_news")]
+        if checks:
+            lines = [f"## Story updates for {ticker} (cite as (story update, date checked))"]
+            for c in checks:
+                cited = "; ".join(f"{s['publisher']}: {s['title']}" for s in c["sources"])
+                lines.append(f"- Move of {c['session_date']}, checked {c['finished_at'][:10]}: {c['verdict_label']}. "
+                             f"{c['update_text']}" + (f" Sources: {cited}" if cited else ""))
+            parts.append("\n".join(lines))
+    return "\n\n".join(parts)
+
+
 def build_context(conn, question: str) -> tuple[str, list[str]]:
     """The material Claude answers from, and the report dates it draws on."""
     days = [r["session_date"] for r in reports_db.list_reports(conn, limit=RECENT_REPORTS)]
@@ -116,6 +160,9 @@ def build_context(conn, question: str) -> tuple[str, list[str]]:
     calendar = calendar_section(conn, tickers)
     if calendar:
         add(calendar)
+    followed = followup_section(conn, tickers)
+    if followed:
+        add(followed)
 
     # Retrieved passages from reports that aren't already included in full
     for p in find_passages(question):

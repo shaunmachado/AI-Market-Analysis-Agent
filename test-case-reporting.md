@@ -179,9 +179,9 @@ In the order they were run. "Suite" means `pytest` over the whole `tests/` folde
 | 28a | The watcher test alone × 12, then the same steps in a script with timings | 1 failed in 12; 3 in 40 (script). Timing showed a 1.3 to 2.3 s first look, all of it in closing the new database | BUG-13's cause. Fixed in the test |
 | 28b | `test_events.py` alone × 25 | 25 passed: the failure didn't come back | Its one traceback line was in `wait_for_scan`, whose limit was about 5 s. Most likely the same Windows stall; the limit is now 20 s (a passing test still returns as soon as the scan finishes). Not proven, so noted in section 5.2 |
 | 28c | Suite × 10, after BUG-13's fix (full tracebacks kept) | **10 of 10: 584 passed, 5 skipped, 1 xfailed** (45-58 s) | |
+| 29 | Live checks (`LIVE_TESTS=1 pytest -k live`) | `test_live_data`, `test_live_calendar_data` and `test_live_search` passed on real Yahoo data; `test_live_filings` skipped (no `SEC_CONTACT`) | See section 5.2 |
 | 30 | `python demo.py publish` | Published (`gh-pages` replaced, 303 files), then `UnicodeEncodeError` printing the closing message into a pipe | Fixed in `demo.py` as for BUG-11; demo tests 18 passed afterwards |
 | 31 | The published demo on GitHub Pages, in a browser | The Filings tab is there, with the sample's filings and first takes | |
-| 29 | Live checks (`LIVE_TESTS=1 pytest -k live`) | `test_live_data`, `test_live_calendar_data` and `test_live_search` passed on real Yahoo data; `test_live_filings` skipped (no `SEC_CONTACT`) | See section 5.2 |
 
 **The 4 skipped tests** (5 since the filings round) are expected: the live checks (they need `LIVE_TESTS=1` and internet, and the SEC's also needs `SEC_CONTACT`), and `test_editing_keeps_the_files_permissions`, which is skipped on Windows because file permissions work differently there.
 

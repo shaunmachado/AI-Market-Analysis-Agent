@@ -81,6 +81,7 @@ No database tables, report formats or normal API responses changed: only the fai
 | `tests/test_watchlist.py` | The watcher test creates its database before the watcher starts | BUG-13 |
 | `tests/test_events.py` | `wait_for_scan` waits up to 20 s instead of about 5 | Row 28b |
 | `.env.example` | A `SEC_CONTACT=` line | The filings check needs your name and email for the SEC; `.env` is read by every entry point |
+| `market-agent-demo/demo.py` (not in this repository) | Prints UTF-8 when its output goes to a file or a pipe. `publish` had already pushed, then crashed printing "Settings → Pages" | BUG-11's cause, in the demo |
 | `market-agent-testenv/testenv.py` (not in this repository) | The after-close run is switched off in the test environment; its few text reads and writes name UTF-8 | BUG-12, and BUG-01's lesson |
 
 ---
@@ -178,6 +179,8 @@ In the order they were run. "Suite" means `pytest` over the whole `tests/` folde
 | 28a | The watcher test alone × 12, then the same steps in a script with timings | 1 failed in 12; 3 in 40 (script). Timing showed a 1.3 to 2.3 s first look, all of it in closing the new database | BUG-13's cause. Fixed in the test |
 | 28b | `test_events.py` alone × 25 | 25 passed: the failure didn't come back | Its one traceback line was in `wait_for_scan`, whose limit was about 5 s. Most likely the same Windows stall; the limit is now 20 s (a passing test still returns as soon as the scan finishes). Not proven, so noted in section 5.2 |
 | 28c | Suite × 10, after BUG-13's fix (full tracebacks kept) | **10 of 10: 584 passed, 5 skipped, 1 xfailed** (45-58 s) | |
+| 30 | `python demo.py publish` | Published (`gh-pages` replaced, 303 files), then `UnicodeEncodeError` printing the closing message into a pipe | Fixed in `demo.py` as for BUG-11; demo tests 18 passed afterwards |
+| 31 | The published demo on GitHub Pages, in a browser | The Filings tab is there, with the sample's filings and first takes | |
 | 29 | Live checks (`LIVE_TESTS=1 pytest -k live`) | `test_live_data`, `test_live_calendar_data` and `test_live_search` passed on real Yahoo data; `test_live_filings` skipped (no `SEC_CONTACT`) | See section 5.2 |
 
 **The 4 skipped tests** (5 since the filings round) are expected: the live checks (they need `LIVE_TESTS=1` and internet, and the SEC's also needs `SEC_CONTACT`), and `test_editing_keeps_the_files_permissions`, which is skipped on Windows because file permissions work differently there.

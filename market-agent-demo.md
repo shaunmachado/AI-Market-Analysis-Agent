@@ -1147,6 +1147,11 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def main() -> None:
+    # Output to a file or a pipe is cp1252 on Windows, which can't print "→" and would stop the
+    # program after it has already published. A real console is left as it is.
+    for stream in (sys.stdout, sys.stderr):
+        if (getattr(stream, "encoding", "") or "").lower().replace("-", "") != "utf8" and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Live demo of the market analyst agent, for GitHub Pages.")
     commands = parser.add_subparsers(dest="command", required=True)
     b = commands.add_parser("build", help="make the site in site/")

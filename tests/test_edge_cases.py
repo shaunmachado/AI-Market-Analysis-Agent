@@ -24,7 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import alerts  # noqa: E402
 import api  # noqa: E402
 import ask  # noqa: E402
+import edgar  # noqa: E402
 import events  # noqa: E402
+import filings  # noqa: E402
 import followups  # noqa: E402
 import market_tools  # noqa: E402
 import prices  # noqa: E402
@@ -562,3 +564,115 @@ def test_news_items_round_trip_through_json_with_odd_characters():
     item = {"title": "Café — \U0001F4C8 <b>bold</b> & \"quotes\"", "url": "https://example.com/?a=1&b=2"}
     block = ToolResultBlock(tool_use_id="t1", content=[{"type": "text", "text": json.dumps(item)}])
     assert run_brief.tool_payload(block) == item
+
+
+# ---------------------------------------------------------------------------
+# Company filings at their limits (edgar.py, filings.py)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("metric, announced, reported, same", [
+    ("revenue", 1_005_990_000, 1e9, True),     # just inside 0.6%
+    ("revenue", 1_006_010_000, 1e9, False),    # just outside
+    ("revenue", 50_600_000, 50e6, True),       # small figures: $600,000 exactly
+    ("revenue", 50_600_001, 50e6, False),      # one dollar more
+    ("eps_diluted", 1.01, 1.00, True),         # a cent
+    ("eps_diluted", 1.012, 1.00, False),       # more than a cent
+])
+def test_confirming_figures_at_the_rounding_limits(metric, announced, reported, same):
+    assert filings.agrees(metric, announced, reported) is same
+
+
+DOC = filings._plain("Revenue was up 20% this quarter, and the outlook was raised.")
+
+
+@pytest.mark.parametrize("quote, found", [
+    ("venue was up", True),                    # 12 characters: the shortest quote that counts
+    ("enue was up", False),                    # 11: too short to prove anything
+    ("Revenue ... quarter", True),             # pieces in order, 14 characters in all
+    ("quarter ... Revenue", False),            # the same pieces, out of order
+    ("Revenue was up 20% this quarter.", True),
+    ("Revenue was up 21% this quarter.", False),
+])
+def test_quotes_at_the_length_limit(quote, found):
+    assert filings.quoted(quote, DOC) is found
+
+
+def _known(value):
+    period = {"start": date(2026, 4, 1), "end": date(2026, 6, 30), "value": value, "derived": False}
+    return {"revenue": {"quarters": {period["end"]: period}}}
+
+
+@pytest.mark.parametrize("value, kept", [(20e9, True), (20.1e9, False), (0.05e9, True), (0.049e9, False)])
+def test_the_wrong_unit_check_at_20_times_and_a_20th(value, kept):
+    notes = []
+    reported = [{"metric": "revenue", "value": value, "as_written": "x", "scale": "millions", "quote": "q"}]
+    rows = filings.compare(reported, date(2026, 9, 30), _known(1e9), notes)["rows"]
+    assert bool(rows) is kept and bool(notes) is not kept
+
+
+@pytest.mark.parametrize("period_end, clear", [
+    ("2026-10-28", True),    # the filing date itself
+    ("2026-10-29", False),   # after the filing: impossible
+    ("2026-04-11", True),    # 200 days before
+    ("2026-04-10", False),   # 201
+])
+def test_a_quarter_end_at_the_edges_of_what_is_believable(period_end, clear):
+    reply = json.dumps({"headline": "Results.", "period_end": period_end,
+                        "points": [{"text": "Up.", "quote": "Revenue was up 20% this quarter"}]})
+    checked = filings.check_reply(reply, "Revenue was up 20% this quarter, and the outlook was raised.", "results", date(2026, 10, 28))
+    assert (checked["period_end"] is not None) is clear
+
+
+def test_documents_are_cut_only_past_the_limit_and_at_a_line_break():
+    exact = "a" * 50 + "\n" + "b" * 49  # 100 characters
+    assert filings._cut(exact, 100) == (exact, False)
+    assert filings._cut(exact + "c", 100) == ("a" * 50, True)
+    assert filings._cut("x" * 101, 100) == ("x" * 100, True)  # one long line: cut at the limit
+
+
+@pytest.mark.parametrize("written, value", [
+    ("1,234.5", 1234.5), ("(0.12)", -0.12), ("12,3456", None), ("1.2.3", None), ("$", None), ("()", None), ("1,234,567", 1234567),
+])
+def test_numbers_at_the_edges_of_how_filings_write_them(written, value):
+    assert edgar.parse_number(written) == value
+
+
+@pytest.mark.parametrize("form, items, kind, title", [
+    ("8-k", ["8.01"], "announcement", "Other events"),               # lower case
+    (" NT  10-Q ", [], "late", "Says its quarterly report will be late"),
+    ("8-K/A", ["2.02", "9.01"], "results", "Amended: Results announcement"),
+    ("8-K", [], "announcement", "Announcement"),                     # no items at all
+    ("8-K", ["9.99"], "announcement", "Item 9.99"),                  # an item the SEC adds later
+    ("10-K405", [], None, None),                                     # a form that isn't followed
+])
+def test_naming_odd_forms_and_items(form, items, kind, title):
+    about = filings.describe(form, items)
+    assert (about["kind"], about["title"]) == (kind, title) if kind else about is None
+
+
+@pytest.mark.parametrize("body, status_code", [
+    ({"accession": "0000789019-26-000123"}, 404),     # the right shape, not listed
+    ({"accession": "000789019-26-000123"}, 400),      # 9 digits first
+    ({"accession": "00000789019-26-000123"}, 400),    # 11
+    ({"accession": " 0000789019-26-000123"}, 400),    # a space
+    ({"accession": "0000789019-26-00012a"}, 400),
+    ({"accession": 789019_26_000123}, 400), ({}, 400), ([], 400), ("0000789019-26-000123", 400),
+])
+def test_reading_a_filing_with_bad_input_is_refused_before_anything_is_spent(client, monkeypatch, body, status_code):
+    monkeypatch.setattr(filings, "read", lambda *a, **k: pytest.fail("nothing should be read"))
+    response = client.post("/api/filings/read", json=body)
+    assert response.status_code == status_code and response.json()["error"]
+
+
+@pytest.mark.parametrize("path, status_code", [
+    ("/api/filings?ticker=ABCDEFGHIJKLMNO", 200),   # 15 characters
+    ("/api/filings?ticker=ABCDEFGHIJKLMNOP", 400),  # 16
+    ("/api/filings?ticker=msft", 200), ("/api/filings?ticker=MS%20FT", 400),
+])
+def test_filings_view_ticker_limits(client, path, status_code):
+    assert client.get(path).status_code == status_code
+
+
+def test_filings_check_and_read_refuse_pages_from_files_or_sandboxes(client):
+    for path in ("/api/filings/check", "/api/filings/read"):
+        assert client.post(path, json={}, headers={"Origin": "null"}).status_code == 403, path

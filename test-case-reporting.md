@@ -4,8 +4,8 @@ What was tested, what was found, what changed because of it, and how to repeat t
 
 | | |
 |---|---|
-| **Date** | 2026-11-10 (first round), 2026-11-12 (second round: company filings) |
-| **Version tested** | First round: `main` at commit `6922fdc` ("Add follow-through and story updates..."), plus the fixes listed in [section 4](#4-bug-log). Second round: the same, plus company filings (`market-agent-filings.md`) and BUG-10 to BUG-12 |
+| **Date** | 2026-11-10 (first round), 2026-11-12 (second round: company filings; third round: a bug hunt with the SEC's real data) |
+| **Version tested** | First round: `main` at commit `6922fdc` ("Add follow-through and story updates..."), plus the fixes listed in [section 4](#4-bug-log). Second round: the same, plus company filings (`market-agent-filings.md`) and BUG-10 to BUG-13. Third round: commit `3d0d333`, plus BUG-14 to BUG-17 |
 | **Machine** | Windows 11 Pro, Python 3.13.3 (default text encoding: cp1252) |
 | **Key packages** | pytest 9.2.0, pandas 3.1.0, numpy 2.5.4, yfinance 1.8.0, starlette 1.10.0, mcp 2.3.0, claude-agent-sdk 0.2.177 |
 
@@ -84,6 +84,32 @@ No database tables, report formats or normal API responses changed: only the fai
 | `market-agent-demo/demo.py` (not in this repository) | Prints UTF-8 when its output goes to a file or a pipe. `publish` had already pushed, then crashed printing "Settings → Pages" | BUG-11's cause, in the demo |
 | `market-agent-testenv/testenv.py` (not in this repository) | The after-close run is switched off in the test environment; its few text reads and writes name UTF-8 | BUG-12, and BUG-01's lesson |
 
+### Third round: a bug hunt with the SEC's real data (2026-11-12)
+
+With `SEC_CONTACT` set, the filings code could be tried on real filings for the first time, for free: everything except Claude. Real press releases, quarterly and annual reports from 18 companies went through it (your 5, plus 13 others chosen to cover banks and the largest US companies), and a full first take was run on Microsoft's real results with a stand-in for Claude.
+
+| | Before | After |
+|---|---|---|
+| Offline tests | 584 passed, 5 skipped, 1 xfailed | **660 passed**, 5 skipped, 1 xfailed |
+| `test_regressions.py` | 29 | 57 (BUG-14 to BUG-17) |
+| `test_edge_cases.py` | 133 | 181 (a new "Company filings" group: 48) |
+| Mutation check on the new rules | | **12 of 12 planted bugs caught** |
+| Live checks (`LIVE_TESTS=1`) | 3 passed, 1 skipped (no `SEC_CONTACT`) | **4 passed**, the SEC's included |
+| Reports whose management's discussion is found | 19 of 27 (all 8 misses were banks) | **26 of 27**, plus the 27th through its attached annual report |
+| Bugs found | | **4 found, 4 fixed** (BUG-14 to BUG-17: 2 medium, 2 low) |
+
+**What the real data confirmed works:** Apple's, JPMorgan's and Microsoft's quarterly figures match what they reported, including fourth quarters worked out from the year. Microsoft's latest results went end to end: the right press release was read, with the one before it for comparison; an invented point was dropped; all five figures were compared with the quarter before and a year earlier, and every one was **confirmed** by Microsoft's real 10-Q. Filing times are right: the SEC's `acceptanceDateTime` really is UTC (checked against each filing's own page, which shows New York time).
+
+**Changes made:**
+
+| File | Change | Bug |
+|---|---|---|
+| `edgar.py` | Management's discussion is also found by a heading of its own, or through the sub-headings its contents entry lists. The first way is tried first, so the 19 reports that worked read exactly as before | BUG-14 |
+| `filings.py` | A 10-K whose discussion is in its attached annual report (EX-13) reads that instead | BUG-14 |
+| `edgar.py` | The SEC's filing envelope (`<DOCUMENT><TYPE>…<TEXT>`) is left out of a document's text | BUG-15 |
+| `filings.py` | A figure's number must be in its quoted row as a whole number, with a loss's brackets | BUG-16 |
+| `filings.py`, `frontend/src/components/FilingsTab.jsx` | Money moves to the next unit when it rounds up to it | BUG-17 |
+
 ---
 
 ## 2. New test files
@@ -96,7 +122,7 @@ tests/
 
 Both use the same setup as the other test files: a temporary database and watchlist, fake Yahoo Finance data (borrowed from `test_market_tools.py`), and no Claude, Discord or Voyage. They need no internet and no keys.
 
-### 2.1 `test_regressions.py` (29 tests)
+### 2.1 `test_regressions.py` (57 tests)
 
 Each test failed before its fix and passes after it. Run one bug's tests with `pytest -v tests/test_regressions.py -k bug03`.
 
@@ -113,9 +139,13 @@ Each test failed before its fix and passes after it. Run one bug's tests with `p
 | BUG-09 | 1 | The live check's saved `yfinance.Ticker` is the real one while every other test sees the fake (runs offline, every time) |
 | BUG-10 | 3 | An edit waits while the file is refused twice, then succeeds. On Windows, a real reader holding `watchlist.txt` open for 0.3 s delays an edit instead of failing it (skipped elsewhere). A file that stays locked still fails cleanly, leaving no temporary file and the list unchanged. |
 | BUG-11 | 3 | With output in cp1252 (as Windows uses for a file or a pipe), printing "✓" and "✗" crashes without the fix and works with it (both shown, as two cases). Every `filings.py` command sets its output up first. |
+| BUG-14 | 5 | Management's discussion is found in each bank layout seen in the SEC's real reports, in miniature: listed by its parts in the contents (JPMorgan, Wells Fargo), a heading of its own (Citigroup, Morgan Stanley), and "Item 7." on the line above it (Bank of America). A contents entry alone still isn't a discussion. A 10-K whose discussion is in its attached annual report reads that. |
+| BUG-15 | 2 | The SEC's filing envelope isn't part of a document's text; a document without one is unchanged |
+| BUG-16 | 11 | Numbers with a digit missing at the front, at the end, or a single digit from inside a figure are left out, and so is a loss written without its brackets. Whole numbers, with or without `$` or brackets, are kept. |
+| BUG-17 | 10 | $999.96M shows as $1.00B, $999,999.60 as $1.0M, and figures that were already right are unchanged. The Filings tab uses the same rule. |
 | OPEN-01 | 1 (xfail) | A request whose Origin matches a spoofed Host header should be refused. It isn't yet, so the test is marked "expected to fail". |
 
-### 2.2 `test_edge_cases.py` (133 tests)
+### 2.2 `test_edge_cases.py` (181 tests)
 
 These cover behaviour that already worked, at its edges, so later versions keep it working. Each limit is tested at the limit and one step past it.
 
@@ -132,8 +162,11 @@ These cover behaviour that already worked, at its edges, so later versions keep 
 | Chart prices (`prices.py`) | 1 | Cached prices expire after 5 minutes; an empty download isn't cached |
 | Ask (`ask.py`) | 5 | Tickers are found however they're written (`nvda's`, `Brk-b`). Empty and 501-character questions are refused before any cost, and exactly 500 characters is accepted. |
 | Runs (`run_brief.py`) | 11 | Tool results are read whatever their shape (text, several parts, an image part, not JSON). Longer watchlists get more turns. News with odd characters survives the trip through JSON. |
+| Company filings (`edgar.py`, `filings.py`, `api.py`) | 48 | Confirming a figure: just inside 0.6% and $600,000 is confirmed, just outside isn't; a cent on earnings per share. A 12-character quote counts and 11 doesn't; pieces joined by "..." must be in order. The wrong-unit check keeps exactly 20 times and a 20th, and drops past them. A quarter ending on the filing date or 200 days before is believed; a day later or 201 days isn't. A document is cut only past its limit, at a line break. Odd forms (`8-k`, ` NT  10-Q `, an item the SEC adds later). Reading a filing with a malformed number, an empty body or a list is a 400 before anything is spent; a listed-looking number that isn't listed is a 404. |
 
 **Do the new tests actually catch bugs?** I planted 12 small bugs in the program, one at a time, and ran the matching edge-case tests (a "mutation check": [section 6, step 5](#step-5-check-the-tests-catch-real-bugs-mutation-check)). For example, a comparison was moved by one step at the flag threshold, the alert-again limit, the 25% "held" limit, the 100-day calendar limit and the 25-day history minimum; the webhook check became "contains discord.com"; the `javascript:` link filter was removed; and `Origin: null` was let through. **All 12 were caught.** One needed both of its duplicate checks mutated (`len(daily) < 25` appears twice in `market_tools.py`), which shows the second check really is a backstop.
+
+**Third round:** 12 more planted bugs, in the filings rules: each part of the whole-number check, each new way of finding management's discussion, reading the attached annual report, the envelope, the money rule, and one step at the rounding, quote-length, wrong-unit, quarter-end and cut-off limits. **All 12 were caught**, and both files were byte-for-byte as before afterwards.
 
 ---
 
@@ -182,6 +215,27 @@ In the order they were run. "Suite" means `pytest` over the whole `tests/` folde
 | 29 | Live checks (`LIVE_TESTS=1 pytest -k live`) | `test_live_data`, `test_live_calendar_data` and `test_live_search` passed on real Yahoo data; `test_live_filings` skipped (no `SEC_CONTACT`) | See section 5.2 |
 | 30 | `python demo.py publish` | Published (`gh-pages` replaced, 303 files), then `UnicodeEncodeError` printing the closing message into a pipe | Fixed in `demo.py` as for BUG-11; demo tests 18 passed afterwards |
 | 31 | The published demo on GitHub Pages, in a browser | The Filings tab is there, with the sample's filings and first takes | |
+
+**Third round: a bug hunt with the SEC's real data (2026-11-12)**
+
+| # | What was run | Result | Effect on the program |
+|---|---|---|---|
+| 32 | `SEC_CONTACT` set; `LIVE_TESTS=1 pytest -k live_filings` | 1 passed: Apple's real filings, documents, press release and quarters | |
+| 33 | `filings.py figures JPM`, `check --no-read` and `show` into a temporary database, Discord off | 32 filings from your 5 companies, $0. JPMorgan's 2025 quarters match its reported net income and EPS; a bank has no gross profit or operating income rows | |
+| 34 | The SEC's `acceptanceDateTime` against each filing's own page, for 5 of Apple's filings | 21:30Z in November and 20:30Z in July are both 4:30pm in New York: it is UTC, as the code assumes | No change |
+| 35 | `gather()` (what Claude would be given) for 14 real filings of your 5 companies | Right documents throughout. **JPMorgan's 10-Q: its discussion wasn't found**, so the cover and contents would have been read. **Every press release began with `EX-99.1 2 file.htm EX-99.1`** | Led to BUG-14 and BUG-15 |
+| 36 | `discussion()` on the latest 10-Q and 10-K of 14 companies (27 reports) | 19 found. All 8 misses were banks: JPMorgan, Citigroup, Morgan Stanley and Wells Fargo (both), Bank of America (10-K) | BUG-14's size |
+| 37 | `check_reply()` with figures copied with a digit missing | "2,281" from "$92,281", "4.9" from "$4.92", and "2" from "$4.92" were all accepted | Led to BUG-16 |
+| 38 | `money()` at the unit boundaries | $999.96M printed "$1000.0M"; $999,999.60 printed "$1,000,000". The Filings tab's own function does the same | Led to BUG-17 |
+| 39 | The removed-stock case: JPM taken off the watchlist | Its 7 filings stay on the Filings tab and in its stock filter | By design, like the calendar and Follow-through, which also keep a removed stock's history. No change |
+| 40 | Fixes; the 27 reports again, old code against new | The 19 that worked: **unchanged**, character for character. 7 of the 8 misses: found, each starting at the real discussion. Wells Fargo's 10-K: read from its attached annual report | |
+| 41 | A full first take on Microsoft's real results, with a stand-in for Claude quoting the real press release | `ok`; the previous announcement included; the invented point dropped; all 5 figures compared and **confirmed** by the real 10-Q | |
+| 42 | New regression tests against the code before the fixes | 15 failed, 13 passed (the 13 are the "must keep working" cases) | Each bug has a test that catches it |
+| 43 | Mutation check: 12 planted bugs | 12 of 12 caught | |
+| 44 | Suite | **660 passed, 5 skipped, 1 xfailed** (at the same time as the test environment's and demo's suites) | |
+| 45 | Test environment and demo suites, against the changed code | First run: 1 failure in each, while I was editing this report, rebuilding the frontend and running the main suite in the same folder (the test environment's last test fails on purpose if the main project changes during its run; the failing names weren't kept). Run again on their own: **40 passed** and **18 passed** | Run them alone, as their guides say |
+| 46 | Live checks, all four | 4 passed. Apple's press release now starts "Exhibit 99.1 / Apple reports fourth quarter results", as the filings guide's check by eye expects | |
+| 47 | Suite × 10 | **10 of 10: 660 passed, 5 skipped, 1 xfailed** (50-66 s), full tracebacks kept | |
 
 **The 4 skipped tests** (5 since the filings round) are expected: the live checks (they need `LIVE_TESTS=1` and internet, and the SEC's also needs `SEC_CONTACT`), and `test_editing_keeps_the_files_permissions`, which is skipped on Windows because file permissions work differently there.
 
@@ -334,6 +388,49 @@ Severity: **High** = breaks the app or gives wrong figures with no warning. **Me
 | **Effect on the program** | None worth changing: creating a brand-new database can take about 1.4 s longer on Windows, once. |
 | **Lesson** | A test with a fixed wait (here 0.3 s) is only as reliable as the slowest thing before it. On Windows, file creation and deletion can stall for a second or more. |
 
+### BUG-14: banks' quarterly and annual reports were read from their cover page — Medium, fixed
+
+| | |
+|---|---|
+| **Where** | `edgar.discussion()`, `filings.gather()` |
+| **Symptom** | **Read this filing** on JPMorgan's 10-Q sent Claude its cover page and contents (60,000 characters, cut off), with the note "Management's discussion couldn't be found". The first take would be about the contents page, at full cost. JPMorgan is on your watchlist. |
+| **How to reproduce (before the fix)** | `edgar.discussion()` on the text of the latest 10-Q or 10-K of JPMorgan, Citigroup, Morgan Stanley or Wells Fargo, or Bank of America's 10-K: each gives "". 8 of 27 real reports; every non-bank worked. |
+| **Root cause** | The search looks for "Item 2. Management's discussion" (Item 7 in a 10-K) with the section after it. Banks set it out differently. JPMorgan and Wells Fargo write that line only in the contents, with the section's parts listed under it; the section itself starts with the first part ("Introduction"). Citigroup and Morgan Stanley head it "Management's Discussion and Analysis…" with no "Item". Bank of America puts "Item 7." on the line above. Wells Fargo's 10-K has no discussion at all: it's in the annual report attached as exhibit EX-13. The guides' sample SEC (and the earlier check of Microsoft's real pages) only had the common layout. |
+| **Fix** | When the usual search fails, two more are tried: a heading line of its own (not a contents entry, which ends in page numbers), then the parts listed under the contents entry, found in order in the report. A 10-K with no discussion and an EX-13 reads the EX-13. The usual search comes first, so every report it found reads exactly as before (checked on all 19). |
+| **Regression tests** | `test_bug14_*` (5) |
+| **Lesson** | A sample made from one company's format can't show another's. Try parsing code on several real companies, chosen to differ (banks, foreign filers, very large reports). |
+
+### BUG-15: every document began with the SEC's filing envelope — Low, fixed
+
+| | |
+|---|---|
+| **Where** | `edgar.to_text()` |
+| **Symptom** | Press releases (Apple's, Microsoft's, Amazon's, JPMorgan's…) began with a line like `EX-99.1 2 a8-kex991q4202609262026.htm EX-99.1`, sent to Claude as part of the filing. The live check's printout showed it, where the filings guide expects the headline. |
+| **Root cause** | The SEC serves these documents inside their filing envelope, `<DOCUMENT><TYPE>EX-99.1<SEQUENCE>2<FILENAME>…<DESCRIPTION>…<TEXT>`, before the HTML. The HTML reader kept the envelope's labels as text. |
+| **Fix** | An envelope at the very start of a document is removed before reading it |
+| **Regression tests** | `test_bug15_*` (2) |
+
+### BUG-16: a figure copied with digits missing still passed the check — Medium, fixed
+
+| | |
+|---|---|
+| **Where** | `filings.check_reply()` |
+| **Symptom** | A figure Claude gave as `"2,281"` with the quote `Total revenue \| 92,281 \| 77,673` was accepted as revenue of $2.28B. `"2"` from `Diluted earnings per share \| $4.92 \| $3.72` was accepted as EPS of $2.00, shown as copied from the filing. `"1,234"` from `$(1,234)` turned a loss into a profit. |
+| **Root cause** | "Is the number in its quoted row" was a plain substring test, so part of a number passed. For revenue and profit, the wrong-unit check would usually catch a slip that size, but only when an earlier quarter is known. Earnings per share has no such check. The quarterly report would flag it as "The report says…", days later. |
+| **Fix** | The number must appear in the row as a whole number: not next to another digit, and not inside brackets unless written with them |
+| **Regression tests** | `test_bug16_a_figure_must_be_a_whole_number_in_its_row` (11 cases) |
+| **Lesson** | When code checks Claude's work, test it with Claude's likely mistakes (a dropped digit, a lost sign), not only with made-up text |
+
+### BUG-17: a figure just under a billion showed as "$1000.0M" — Low, fixed
+
+| | |
+|---|---|
+| **Where** | `filings.money()` (Discord and the command line), `money()` in `FilingsTab.jsx` (the Filings tab) |
+| **Symptom** | $999.96M showed as `$1000.0M`, and $999,999.60 as `$1,000,000` |
+| **Root cause** | The unit was chosen before rounding |
+| **Fix** | A figure that rounds up to the next unit is shown in it: `$1.00B`, `$1.0M` |
+| **Regression tests** | `test_bug17_*` (10) |
+
 ---
 
 ## 5. Open issues and what wasn't tested
@@ -358,13 +455,16 @@ Severity: **High** = breaks the app or gives wrong figures with no warning. **Me
 | The scheduled job | Needs Task Scheduler or cron | `market-agent-testing.md` section 8 |
 | Two separate programs creating a brand-new database at once | A cross-process timing test would be slow and unreliable | See BUG-02 "Limit". Low risk: it only matters on the very first start. |
 | The test environment and demo folders (`market-agent-testenv/`, `market-agent-demo/`) | Not in this repository | Run their own `pytest -v` as their guides describe. They read `watchlist.txt` through the same code, so BUG-01's fix applies there too. (Second round: both were run, 40 and 18 passed.) |
-| The real SEC (`test_live_filings`, `python filings.py check` against sec.gov) | `SEC_CONTACT` must be your real name and email, which the SEC sees with every request. It wasn't set, and wasn't set for you. | Add `SEC_CONTACT=Your Name you@yourmail.com` to `.env`, then `$env:LIVE_TESTS=1; pytest -v -s -k live_filings` and the filings guide's section 12.5 |
+| ~~The real SEC~~ | Tested in the third round, once `SEC_CONTACT` was set: the live check passes, and 18 companies' real filings went through everything but Claude | `$env:LIVE_TESTS=1; pytest -v -s -k live_filings` before each release |
+| A 10-K whose discussion is in an attached annual report that names it differently | Only Wells Fargo's was seen. Its annual report starts with the discussion, so it's read from the start | If a first take says "the annual report attached… was read" and is about something else, the discussion is further in |
+| Earnings per share copied from the wrong row | Releases also have a "Diluted" row of share counts (Microsoft's: `Diluted \| 7,446 \| 7,466`). A figure from it passes every check, because earnings per share has no wrong-unit check (it can move a lot between quarters). The quarterly report would flag it later | Watch the first real takes. A limit on how far EPS can move from the quarter before would catch it, at the cost of hiding a real large move |
 | Why `test_events.py::test_update_now_has_a_cooldown_and_runs_one_at_a_time` failed once | It failed once in 20 suite runs and not in 35 more, so its full traceback wasn't caught | Its wait limit is now 20 s. If it fails again, run step 2 with `--tb=long` saved per run (as in row 28c) and log what it shows |
 | First takes by real Claude, and their real cost | Costs a few cents a read | `python filings.py read ACCESSION` on a recent results announcement (filings guide, section 12.5). It prints the cost. |
 
 ### 5.3 Guides to update
 
-- `market-agent-testing.md` section 3 says `415 passed, 4 skipped` (after the filings guide). On Windows today the full suite gives **584 passed, 5 skipped, 1 xfailed**: 590 tests in all, which is the guide's 419 (415 + 4), plus `test_regressions.py` (29) and `test_edge_cases.py` (133), plus 9 tests this project added to the guides' own files (such as the after-close run's, in `test_frontend_api.py`). The 5th skip is the Windows-only file-permissions test, and the xfail is OPEN-01. (First round: the guide said 276 passed, 3 skipped, and the suite gave 439 passed, 4 skipped, 1 xfailed.)
+- `market-agent-testing.md` section 3 says `415 passed, 4 skipped` (after the filings guide). On Windows today the full suite gives **660 passed, 5 skipped, 1 xfailed**: 666 tests in all, which is the guide's 419 (415 + 4), plus `test_regressions.py` (57) and `test_edge_cases.py` (181), plus 9 tests this project added to the guides' own files (such as the after-close run's, in `test_frontend_api.py`). The 5th skip is the Windows-only file-permissions test, and the xfail is OPEN-01. (Second round: 584 passed.)
+- `market-agent-filings.md` describes `discussion()` as finding "Item 2" (or "Item 7") only, and its section 18 puts a missing discussion down to `MAX_BYTES`. With BUG-14's fix, banks' layouts are found too, and the usual cause of a missing discussion was the layout, not the size. (First round: the guide said 276 passed, 3 skipped, and the suite gave 439 passed, 4 skipped, 1 xfailed.)
 - The guide's [appendix](market-agent-testing.md#appendix-test-file-source) holds the full source of `tests/test_market_tools.py`, and says to replace the file with it. **That would undo the BUG-09 fix.** Copy the two changes into the appendix (the `REAL_TICKER = market_tools.yf.Ticker` line near the top, and its use in `test_live_data`), or stop replacing the file from the guide.
 - `test_events.py::test_live_calendar_data` uses the same "undo the fake with `yfinance.Ticker`" line. It works today only because that test doesn't use the `cal` fixture, which is what swaps in the fake (and isn't autouse). If the fixture is added to the test or made autouse, the same bug appears. Saving the real class at import, as `test_market_tools.py` now does, would make it safe.
 
@@ -383,7 +483,7 @@ pip install pytest
 pytest -q
 ```
 
-Write down the result in your run log ([template](#71-run-log-entry)). **Expected now:** `584 passed, 5 skipped, 1 xfailed` on Windows. On Mac/Linux it should be `584 passed, 5 skipped, 1 xfailed` too: the file-permissions test runs there, and the Windows-only BUG-10 test is skipped instead (not yet confirmed on a Mac). Any change in the numbers needs an explanation: new tests, removed tests, or a bug.
+Write down the result in your run log ([template](#71-run-log-entry)). **Expected now:** `660 passed, 5 skipped, 1 xfailed` on Windows. On Mac/Linux it should be `660 passed, 5 skipped, 1 xfailed` too: the file-permissions test runs there, and the Windows-only BUG-10 test is skipped instead (not yet confirmed on a Mac). Any change in the numbers needs an explanation: new tests, removed tests, or a bug.
 
 - `failed`: a real problem. Read the first failure only, fix it, run again.
 - `XPASS(strict)` on an `open01` test: the open issue has been fixed. Remove its `xfail` mark and move it to the bug log as fixed.

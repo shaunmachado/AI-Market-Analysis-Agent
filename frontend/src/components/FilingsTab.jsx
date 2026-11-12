@@ -24,8 +24,9 @@ function money(value, unit) {
   const sign = value < 0 ? '-' : ''
   const size = Math.abs(value)
   if (unit !== 'USD') return `${sign}$${size.toFixed(2)}`
-  if (size >= 1e9) return `${sign}$${(size / 1e9).toFixed(2)}B`
-  if (size >= 1e6) return `${sign}$${(size / 1e6).toFixed(1)}M`
+  // $999.96M rounds to a billion: show "$1.00B", not "$1000.0M"
+  if (size >= 1e9 || (size / 1e6).toFixed(1) === '1000.0') return `${sign}$${(size / 1e9).toFixed(2)}B`
+  if (size >= 1e6 || size.toFixed(0) === '1000000') return `${sign}$${(size / 1e6).toFixed(1)}M`
   return `${sign}$${Math.round(size).toLocaleString()}`
 }
 

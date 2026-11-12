@@ -289,6 +289,7 @@ _BLOCKS = {"p", "div", "br", "li", "ul", "ol", "table", "hr", "h1", "h2", "h3", 
 _SKIPPED = {"script", "style", "head", "noscript", "ix:header"}
 _VOID = {"br", "hr", "img", "input", "meta", "link", "col", "area", "base", "wbr"}
 _HIDDEN = re.compile(r"display\s*:\s*none", re.I)
+_ENVELOPE = re.compile(r"\A\s*<DOCUMENT>.{0,2000}?<TEXT>", re.I | re.S)
 
 
 def _join_row(cells: list[str]) -> str:
@@ -389,6 +390,9 @@ def to_text(html: str) -> str:
     Hidden parts (scripts, styles, inline-XBRL headers) are left out."""
     if "<" not in html:
         return tidy(html)
+    # The SEC serves some documents inside their filing envelope: <DOCUMENT><TYPE>EX-99.1<SEQUENCE>2
+    # <FILENAME>...<TEXT>, then the HTML. Those labels aren't part of the document.
+    html = _ENVELOPE.sub("", html, count=1)
     parser = _Text()
     try:
         parser.feed(html)
@@ -398,19 +402,67 @@ def to_text(html: str) -> str:
     return tidy(parser.text())
 
 
+MIN_DISCUSSION = 2000  # characters: anything shorter is a contents entry, not the section
+# "Management's Discussion and Analysis..." as a heading of its own. A contents entry has page numbers
+# after a " | ", so it doesn't match.
+_DISCUSSION_HEADING = re.compile(r"(?im)^[ \t]*management'?s\s+discussion\s+and\s+analysis\b[^|\n]*$")
+
+
 def discussion(text: str, annual: bool) -> str:
     """Management's discussion of the results from a quarterly (10-Q) or annual (10-K) report,
-    or '' if it can't be found. The heading appears in the contents list too, so the longest match wins."""
+    or '' if it can't be found. The heading appears in the contents list too, so the longest match wins.
+
+    Banks often set the section out differently, so if "Item 2. Management's discussion" (Item 7 in an
+    annual report) isn't found with the section after it, two other ways are tried:
+    - a heading line of its own, without "Item" (Citigroup, Morgan Stanley; Bank of America has
+      "Item 7." on the line above it)
+    - the section's own sub-headings, as its contents entry lists them (JPMorgan, Wells Fargo)"""
     number, ends = ("7", r"7a|8") if annual else ("2", r"3|4")
     start = re.compile(rf"(?im)^\s*item\s*{number}\s*[.:\-]?\s*\|?\s*management'?s\s+discussion")
     end = re.compile(rf"(?im)^\s*item\s*(?:{ends})\s*[.:\-]?\s*\|?\s*[a-z]")
+    for found in (_longest(text, start, end), _longest(text, _DISCUSSION_HEADING, end)):
+        if len(found) > MIN_DISCUSSION:
+            return found.strip()
+    return _from_contents(text, start, end)
+
+
+def _longest(text: str, start: re.Pattern, end: re.Pattern) -> str:
+    """The longest stretch from a match of start to the next match of end (or the end of the text)."""
     best = ""
     for match in start.finditer(text):
         stop = end.search(text, match.end())
         body = text[match.start(): stop.start() if stop else len(text)]
         if len(body) > len(best):
             best = body
-    return best.strip() if len(best) > 2000 else ""
+    return best
+
+
+def _from_contents(text: str, start: re.Pattern, end: re.Pattern) -> str:
+    """The section found through its contents entry: the sub-headings listed under "Item 2. Management's
+    discussion" (say "Executive Overview | 5"), the first of which starts the section in the report itself."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not start.match(line):
+            continue
+        titles, j = [], i + 1
+        while j < len(lines) and j <= i + 80 and not re.match(r"(?i)^\s*(item\s*\d|part\s+i)", lines[j]):
+            title = " ".join(re.sub(r"(\|\s*[\divxlc]{1,4}\s*)+$", "", lines[j], flags=re.I).split()).lower()
+            if 3 <= len(title) <= 150:
+                titles.append(title)
+            j += 1
+        first_seen = {}
+        for k in range(j, len(lines)):  # where each sub-heading first appears as a line of its own, after the contents
+            key = " ".join(lines[k].split()).lower()
+            if key in titles and key not in first_seen:
+                first_seen[key] = k
+        at = [first_seen[t] for t in titles if t in first_seen]
+        if len(at) < 3 or at[:3] != sorted(at[:3]):  # not a list of the section's parts, in order
+            continue
+        stop = next((k for k in range(at[0] + 1, len(lines)) if end.match(lines[k])), len(lines))
+        body = "\n".join(lines[at[0]:stop])
+        if len(body) > MIN_DISCUSSION:
+            return body.strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------

@@ -263,9 +263,9 @@ def money(value: float | None, unit: str = "USD") -> str:
     sign, size = ("-" if value < 0 else ""), abs(value)
     if unit != "USD":
         return f"{sign}${size:.2f}"
-    if size >= 1e9:
+    if size >= 1e9 or f"{size / 1e6:.1f}" == "1000.0":  # $999.96M rounds to a billion: not "$1000.0M"
         return f"{sign}${size / 1e9:.2f}B"
-    if size >= 1e6:
+    if size >= 1e6 or f"{size:.0f}" == "1000000":
         return f"{sign}${size / 1e6:.1f}M"
     return f"{sign}${size:,.0f}"
 
@@ -422,6 +422,13 @@ def quoted(quote, document: str) -> bool:
     return True
 
 
+def _number_in(written: str, quote: str) -> bool:
+    """Is the number, exactly as written, in the quote as a whole number? Not a part of a longer one
+    ("2,281" in "$92,281", "4.9" in "$4.92"), and not without the brackets that make it a loss there."""
+    number, row = written.replace(" ", ""), quote.replace(" ", "")
+    return re.search(rf"(?<![\d.,(])(?<!\(\$){re.escape(number)}(?!\d|[.,]\d)", row) is not None
+
+
 def _json(text: str) -> dict:
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end < start:
@@ -482,7 +489,7 @@ def check_reply(text: str, document: str, kind: str, filing_date: date) -> dict:
             scale = "units" if edgar.METRICS[metric]["unit"] != "USD" else str(entry.get("scale") or "").lower()
             quote, number = " ".join(str(entry.get("quote") or "").split()), edgar.parse_number(written)
             if number is None or scale not in edgar.SCALES or not quoted(quote, plain) \
-                    or written.replace(" ", "") not in quote.replace(" ", ""):
+                    or not _number_in(written, quote):
                 dropped.append("figures")
                 continue
             seen.add(metric)
@@ -733,9 +740,17 @@ def gather(filing: dict) -> dict:
     elif filing["kind"] in ("quarterly", "annual"):
         if main is None:
             raise FilingError("This filing has no document that can be read.", 422)
+        annual = filing["kind"] == "annual"
         chosen, whole = main, edgar.to_text(edgar.get_text(main["url"]))
-        text = edgar.discussion(whole, annual=filing["kind"] == "annual")
-        if not text:
+        text = edgar.discussion(whole, annual=annual)
+        attached = next((d for d in documents if d["type"].startswith("EX-13")), None)
+        if not text and attached:  # the discussion is in the annual report attached to the filing (Wells Fargo's is)
+            chosen, whole = attached, edgar.to_text(edgar.get_text(attached["url"]))
+            text = edgar.discussion(whole, annual=annual)
+            if not text:
+                text = whole
+                notes.append("Management's discussion is in the annual report attached to this filing, so that was read.")
+        elif not text:
             text = whole
             notes.append("Management's discussion couldn't be found in the report, so the start of the report was read instead.")
     else:

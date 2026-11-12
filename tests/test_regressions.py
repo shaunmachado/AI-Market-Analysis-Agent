@@ -9,6 +9,7 @@ Once the issue is fixed it passes, pytest reports that as a failure (strict), an
 """
 
 import ast
+import json
 import os
 import subprocess
 import sys
@@ -23,6 +24,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import alerts  # noqa: E402
 import api  # noqa: E402
+import edgar  # noqa: E402
 import events  # noqa: E402
 import filings  # noqa: E402
 import market_tools  # noqa: E402
@@ -379,6 +381,149 @@ def test_bug11_every_filings_command_sets_up_its_output(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["filings.py", "list"])
     filings.main()
     assert called
+
+
+# ---------------------------------------------------------------------------
+# BUG-14: banks' quarterly and annual reports were read from their cover page. The search for
+# "Item 2. Management's discussion" found only the contents entry in JPMorgan's, Citigroup's,
+# Morgan Stanley's and Wells Fargo's reports (and Bank of America's 10-K), so "Read this filing" sent
+# Claude the cover and contents. Found with the SEC's real reports: 8 of 27 failed, all banks.
+# Each layout below is the real one, in miniature.
+# ---------------------------------------------------------------------------
+
+BODY = "The firm's results in the quarter were driven by higher revenue and lower credit costs. " * 40  # > 2,000 characters
+
+
+def test_bug14_a_discussion_listed_by_its_parts_in_the_contents_is_found():  # JPMorgan, Wells Fargo
+    text = "\n".join([
+        "TABLE OF CONTENTS", "Item 1. | Financial Statements", "Consolidated statements of income | 92",
+        "Item 2. | Management's Discussion and Analysis of Financial Condition and Results of Operations.",
+        "Consolidated Financial Highlights | 3", "Introduction | 4", "Executive Overview | 5", "Consolidated Results of Operations | 9",
+        "Item 3. | Quantitative and Qualitative Disclosures About Market Risk. | 202", "Item 4. | Controls and Procedures | 202",
+        "INTRODUCTION", BODY, "Executive Overview", BODY, "Consolidated Results of Operations", BODY,
+        "Consolidated statements of income", "Total net revenue | 50,170",
+        "Item 3. Quantitative and Qualitative Disclosures About Market Risk.", "See the Market Risk Management section."])
+
+    found = edgar.discussion(text, annual=False)
+
+    assert found.startswith("INTRODUCTION") and "Executive Overview" in found
+    assert "Item 3. Quantitative" not in found and "TABLE OF CONTENTS" not in found
+
+
+@pytest.mark.parametrize("lines", [
+    pytest.param(["MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION | 7", "SEGMENT RESULTS | 20",
+                  "MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION", "AND RESULTS OF OPERATIONS",
+                  "EXECUTIVE SUMMARY", BODY], id="a-heading-of-its-own"),   # Citigroup, Morgan Stanley
+    pytest.param(["Item 7. | Management's Discussion and Analysis of Financial Condition and Results of Operations | 25",
+                  "Item 7A. | Quantitative and Qualitative Disclosures about Market Risk | 70", "Item 8. | Financial Statements | 75",
+                  "Item 7. Bank of America Corporation and Subsidiaries",
+                  "Management's Discussion and Analysis of Financial Condition and Results of Operations", BODY,
+                  "Item 7A. Quantitative and Qualitative Disclosures about Market Risk", "See Market Risk Management."],
+                 id="item-7-on-the-line-above"),                              # Bank of America's 10-K
+])
+def test_bug14_a_discussion_heading_without_item_on_its_line_is_found(lines):
+    found = edgar.discussion("\n".join(lines), annual=True)
+    assert found.lower().startswith("management's discussion and analysis of financial condition")
+    assert BODY.strip() in found and "Item 7A" not in found and "| 7" not in found
+
+
+def test_bug14_a_contents_entry_alone_is_still_not_a_discussion():
+    text = "\n".join(["Item 2. | Management's Discussion and Analysis | 30", "Overview | 31", "Results | 32", "Liquidity | 40",
+                      "Item 3. | Market Risk | 50", "The rest of the report, with no sections of that name. " * 60])
+    assert edgar.discussion(text, annual=False) == ""
+
+
+def test_bug14_an_annual_report_attached_to_the_10k_is_read(monkeypatch):  # Wells Fargo puts it in its EX-13
+    pages = {"https://www.sec.gov/Archives/edgar/data/72971/000007297126000001/wfc-10k.htm":
+             "<p>ITEM 7. | MANAGEMENT'S DISCUSSION AND ANALYSIS</p><p>Information in response to this Item 7 can be found in "
+             "the 2025 Annual Report to Shareholders under Financial Review.</p><p>ITEM 7A. | MARKET RISK</p>" + "<p>Cover.</p>" * 50,
+             "https://www.sec.gov/Archives/edgar/data/72971/000007297126000001/wfc-ex13.htm":
+             "<p>Exhibit 13</p><p>Financial Review</p><p>" + BODY + "</p>"}
+    documents = [{"name": name.rsplit("/", 1)[1], "type": kind, "url": name, "description": "", "size": None}
+                 for name, kind in zip(pages, ("10-K", "EX-13"))]
+    monkeypatch.setattr(edgar, "filing_documents", lambda *args: documents)
+    monkeypatch.setattr(edgar, "get_text", lambda url, *args: pages[url])
+    filing = {"cik": 72971, "accession": "0000072971-26-000001", "primary_doc": "wfc-10k.htm", "form": "10-K", "kind": "annual"}
+
+    source = filings.gather(filing)
+
+    assert source["name"] == "wfc-ex13.htm" and "Financial Review" in source["text"] and BODY.strip() in source["text"]
+    assert any("annual report attached" in note for note in source["notes"])
+
+
+# ---------------------------------------------------------------------------
+# BUG-15: every document the SEC serves inside its filing envelope began, as text, with a line
+# like "EX-99.1 2 a8-kex991q4202609262026.htm EX-99.1" (Apple's, Microsoft's and Amazon's press
+# releases all did). Not part of the document, and sent to Claude with it.
+# ---------------------------------------------------------------------------
+
+def test_bug15_the_secs_filing_envelope_isnt_part_of_the_text():
+    html = ("<DOCUMENT>\n<TYPE>EX-99.1\n<SEQUENCE>2\n<FILENAME>a8-kex991q4202609262026.htm\n<DESCRIPTION>EX-99.1\n<TEXT>\n"
+            "<html><head><title>Document</title></head><body><div>Exhibit 99.1</div>"
+            "<div>Apple reports fourth quarter results</div></body></html>\n</TEXT>\n</DOCUMENT>")
+    text = edgar.to_text(html)
+    assert text.splitlines()[0] == "Exhibit 99.1" and "a8-kex991" not in text and "SEQUENCE" not in text
+    assert "Apple reports fourth quarter results" in text
+
+
+def test_bug15_a_document_without_the_envelope_is_unchanged():
+    html = "<html><body><p>Exhibit 99.1</p><p>The word <b>DOCUMENT</b> and a &lt;TEXT&gt; label stay.</p></body></html>"
+    assert edgar.to_text(html) == "Exhibit 99.1\nThe word DOCUMENT and a <TEXT> label stay."
+
+
+# ---------------------------------------------------------------------------
+# BUG-16: a figure Claude copied with digits missing still passed the check that its number is in
+# its quoted row, because that was a plain "is it inside" test: "2,281" is inside "$92,281" ($2.28B
+# instead of $92.28B), and "2" is inside "$4.92" (earnings per share of $2.00). And "1,234" from
+# "$(1,234)" turned a loss into a profit. The number must now be in the row as a whole.
+# ---------------------------------------------------------------------------
+
+ROWS = ("Microsoft Announces First Quarter Results\nRevenue was $92.3 billion and increased 19%.\n"
+        "Total revenue | 92,281 | 77,673\nDiluted earnings per share | $4.92 | $3.72\n"
+        "Net income (loss) | $(1,234) | $567\nOperating loss | ($ 45) | (12)\n" + "Other text. " * 40)
+
+
+def _figure(written, quote, metric, scale="millions"):
+    reply = json.dumps({"headline": "Microsoft reported revenue of $92.3 billion.", "period_end": "2026-09-30",
+                        "points": [{"text": "Revenue grew.", "quote": "Revenue was $92.3 billion and increased 19%."}],
+                        "figures": [{"metric": metric, "as_written": written, "scale": scale, "quote": quote}]})
+    found = filings.check_reply(reply, ROWS, "results", date(2026, 10, 28))["reported"]
+    return found[0]["value"] if found else None
+
+
+@pytest.mark.parametrize("written, quote, metric, value", [
+    ("92,281", "Total revenue | 92,281 | 77,673", "revenue", 92_281e6),
+    ("2,281", "Total revenue | 92,281 | 77,673", "revenue", None),                        # a digit missing at the front
+    ("92,28", "Total revenue | 92,281 | 77,673", "revenue", None),
+    ("$4.92", "Diluted earnings per share | $4.92 | $3.72", "eps_diluted", 4.92),
+    ("4.9", "Diluted earnings per share | $4.92 | $3.72", "eps_diluted", None),          # a digit missing at the end
+    ("2", "Diluted earnings per share | $4.92 | $3.72", "eps_diluted", None),            # one digit from inside
+    ("(1,234)", "Net income (loss) | $(1,234) | $567", "net_income", -1_234e6),
+    ("$(1,234)", "Net income (loss) | $(1,234) | $567", "net_income", -1_234e6),
+    ("1,234", "Net income (loss) | $(1,234) | $567", "net_income", None),               # a loss's brackets dropped
+    ("45", "Operating loss | ($ 45) | (12)", "operating_income", None),                 # the same, as "($ 45)"
+    ("567", "Net income (loss) | $(1,234) | $567", "net_income", 567e6),                # a whole number: kept
+])
+def test_bug16_a_figure_must_be_a_whole_number_in_its_row(written, quote, metric, value):
+    assert _figure(written, quote, metric, "units" if metric == "eps_diluted" else "millions") == value
+
+
+# ---------------------------------------------------------------------------
+# BUG-17: a figure just under a billion showed as "$1000.0M" (on the Filings tab and in Discord), and
+# one just under a million as "$1,000,000". It now moves to the next unit when it rounds up to it.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value, shown", [
+    (999_940_000, "$999.9M"), (999_960_000, "$1.00B"), (999_999_999, "$1.00B"), (1e9, "$1.00B"), (-999_960_000, "-$1.00B"),
+    (999_999.4, "$999,999"), (999_999.6, "$1.0M"), (420_500_000, "$420.5M"), (46.19e9, "$46.19B"),
+])
+def test_bug17_money_never_shows_1000_of_a_unit(value, shown):
+    assert filings.money(value) == shown
+
+
+def test_bug17_the_filings_tab_formats_money_the_same_way():
+    source = (PROJECT / "frontend" / "src" / "components" / "FilingsTab.jsx").read_text(encoding="utf-8")
+    assert "(size / 1e6).toFixed(1) === '1000.0'" in source and "size.toFixed(0) === '1000000'" in source
 
 
 # ---------------------------------------------------------------------------

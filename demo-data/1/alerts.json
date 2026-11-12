@@ -1,0 +1,1 @@
+{"enabled":true,"alerts":[{"session_date":"2026-11-12","kind":"flag","ticker":"MSFT","return_1d_pct":4.96,"return_zscore":2.98,"as_of":"2026-11-12 12:45 ET","status":"sent","error":null,"created_at":"2026-11-12T17:45:44Z","sent_at":"2026-11-12T17:45:44Z"}]}

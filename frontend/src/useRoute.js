@@ -10,12 +10,15 @@ import { useEffect, useState } from 'react'
 //   #/follow-through        What the price did after each flagged move
 //   #/stories               Story updates: what the news has said since
 //   #/stories/2026-10-13/MSFT   ...with that move picked, ready to check
+//   #/filings               Company filings from the SEC, with first takes
+//   #/filings/0000789019-26-000123   ...with that filing picked
 // So tabs and days can be bookmarked, and the browser's Back button works.
 
 function parse(hash) {
   const [, tab, date, ticker] = hash.replace(/^#/, '').split('/')
   if (tab === 'stocks') return { tab: 'stocks', date: null }
   if (tab === 'follow-through') return { tab: 'followthrough', date: null }
+  if (tab === 'filings') return { tab: 'filings', date: null, accession: /^\d{10}-\d{2}-\d{6}$/.test(date || '') ? date : null }
   if (tab === 'stories') {
     const picked = /^\d{4}-\d{2}-\d{2}$/.test(date || '') && /^[A-Za-z0-9.\-^=]{1,15}$/.test(ticker || '')
     return { tab: 'stories', date: picked ? date : null, ticker: picked ? decodeURIComponent(ticker).toUpperCase() : null }
@@ -31,6 +34,7 @@ export const routes = {
   stocks: '#/stocks',
   followThrough: '#/follow-through',
   stories: (date, ticker) => (date && ticker ? `#/stories/${date}/${encodeURIComponent(ticker)}` : '#/stories'),
+  filings: (accession) => (accession ? `#/filings/${accession}` : '#/filings'),
 }
 
 export function useRoute() {

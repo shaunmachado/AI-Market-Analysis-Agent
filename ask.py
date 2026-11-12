@@ -5,9 +5,11 @@ For each question it gathers, within a size limit:
 2. The events calendar: everything in the next 30 days, plus the last 30 days for named tickers.
 3. What happened after flagged moves (followups.py and stories.py): for named tickers, each
    move's follow-through and story updates; otherwise, how moves of each kind played out.
-4. The passages from any report that best match the question, found by
+4. Company filings (filings.py): for named tickers, their latest filings and first takes;
+   otherwise, what was filed in the last week.
+5. The passages from any report that best match the question, found by
    search_index.py (keywords plus meaning), so older reports are reachable.
-5. The 10 most recent reports in full, plus recent reports where a named ticker was flagged.
+6. The 10 most recent reports in full, plus recent reports where a named ticker was flagged.
 Claude is told to answer from that material alone and to cite report dates.
 """
 
@@ -19,6 +21,7 @@ from datetime import timedelta
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, StreamEvent, query
 
 import events
+import filings
 import followups
 import reports_db
 import search_index
@@ -36,6 +39,9 @@ Rules:
 - Follow-through figures say what a stock's price did after a flagged move: cite them as (follow-through).
   Story updates say what later news added: cite them as (story update, then the date it was checked).
   Both are history, never a forecast.
+- Company filings are what a company itself filed with the SEC: cite them as (filing, then the date it was filed).
+  A first take's figures were checked against the filing: use them exactly as given. "Confirmed" means the
+  quarterly report later gave the same figure. If a filing has no first take, say only that it was filed.
 - This is research, not investment advice. Never recommend buying or selling.
 - Keep answers short: a few sentences or a short list, in markdown."""
 
@@ -46,6 +52,9 @@ PASSAGES = 8                     # best-matching passages from any report (the r
 CALENDAR_DAYS = 30               # events calendar: this far ahead (all tickers) and back (named tickers)
 FOLLOWUP_MOVES = 10              # flagged moves' follow-through per named ticker
 STORY_UPDATES = 3                # latest story updates per named ticker
+FILING_TAKES = 2                 # latest first takes on filings, in full, per named ticker
+FILINGS_LISTED = 8               # latest filings listed per named ticker
+FILINGS_DAYS = 7                 # with no ticker named: filings from this many days back
 MAX_CONTEXT_CHARS = 60_000       # keeps each question's cost predictable
 
 options = ClaudeAgentOptions(
@@ -126,6 +135,57 @@ def followup_section(conn, tickers: list[str]) -> str:
     return "\n\n".join(parts)
 
 
+def _take_lines(f: dict) -> list[str]:
+    """One filing's first take as lines of text."""
+    take = f["read"]
+    lines = [f"### {f['ticker']}: {f['title']}, filed {f['filing_date']} (cite as (filing, {f['filing_date']}))",
+             take["headline"]]
+    figures = take["figures"] or {}
+    for r in figures.get("rows", []):
+        parts = [f"{r['label']}: {filings.money(r['value'], r['unit'])}"]
+        if r["change_prior_pct"] is not None:
+            parts.append(f"{r['change_prior_pct']:+.1f}% vs the quarter before")
+        if r["change_year_pct"] is not None:
+            parts.append(f"{r['change_year_pct']:+.1f}% vs a year earlier")
+        if r["check"] == "confirmed":
+            parts.append("confirmed by the quarterly report")
+        elif r["check"] == "differs":
+            parts.append(f"but the quarterly report says {filings.money(r['report_value'], r['unit'])}")
+        lines.append("- " + ", ".join(parts))
+    lines += [f"- {m['label']}: {m['value']}%" for m in figures.get("margins", [])]
+    lines += [f"- {p['text']}" for p in take["points"]]
+    lines += [f"- Guidance ({filings.DIRECTIONS[g['direction']].lower()}): {g['text']}" for g in take["guidance"]]
+    lines += [f"- Changed since the last announcement: {c['text']}" for c in take["changes"]]
+    return lines
+
+
+def filings_section(conn, tickers: list[str]) -> str:
+    """What companies filed with the SEC: each named ticker's latest filings and first takes, or,
+    with no ticker named, everything filed in the last week."""
+    def has_take(f):
+        return f["read"] is not None and f["read"]["status"] == "ok"
+
+    if not tickers:
+        found = filings.list_filings(conn, since=filings._days_ago(FILINGS_DAYS), limit=40)
+        if not found:
+            return ""
+        lines = [f"## Company filings in the last {FILINGS_DAYS} days (cite as (filing, date filed))", ""]
+        lines += [f"- {f['filing_date']} {f['ticker']}: {f['title']}" + (f". {f['read']['headline']}" if has_take(f) else "")
+                  for f in found]
+        return "\n".join(lines)
+    parts = []
+    for ticker in tickers:
+        found = filings.list_filings(conn, ticker, limit=60)
+        if not found:
+            continue
+        lines = [f"## Company filings for {ticker} (cite as (filing, date filed))", ""]
+        lines += [f"- {f['filing_date']}: {f['title']}" + ("" if has_take(f) else " (not read)") for f in found[:FILINGS_LISTED]]
+        for f in [f for f in found if has_take(f)][:FILING_TAKES]:
+            lines += ["", *_take_lines(f)]
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts)
+
+
 def build_context(conn, question: str) -> tuple[str, list[str]]:
     """The material Claude answers from, and the report dates it draws on."""
     days = [r["session_date"] for r in reports_db.list_reports(conn, limit=RECENT_REPORTS)]
@@ -163,6 +223,9 @@ def build_context(conn, question: str) -> tuple[str, list[str]]:
     followed = followup_section(conn, tickers)
     if followed:
         add(followed)
+    filed = filings_section(conn, tickers)
+    if filed:
+        add(filed)
 
     # Retrieved passages from reports that aren't already included in full
     for p in find_passages(question):

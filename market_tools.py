@@ -11,7 +11,9 @@ Works at any time of day:
 
 upcoming_events reads the events calendar (events.py) from the reports database, so
 briefs can say what's coming up. past_moves reads the follow-through of earlier flagged
-moves (followups.py), so briefs can say how similar moves played out.
+moves (followups.py), so briefs can say how similar moves played out. recent_filings reads
+what companies have filed with the SEC (filings.py), so a move can be explained from the
+company's own announcement.
 
 Every flagged move also comes with sector and market context: how the ticker did
 against its sector ETF and the S&P 500, and whether that gap was unusual. That
@@ -65,12 +67,23 @@ def _to_et(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return index.tz_localize(ET) if index.tz is None else index.tz_convert(ET)
 
 
+def read_watchlist_text() -> str:
+    """watchlist.txt as text. The app saves it as UTF-8. A byte-order mark (which some Windows
+    editors add) is skipped, and a file saved in the older Windows encoding still reads.
+    Never rely on Python's default encoding here: on Windows it isn't UTF-8."""
+    data = WATCHLIST_FILE.read_bytes()
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1252", errors="replace")
+
+
 def _watchlist_entries() -> list[list[str]]:
     """Each line: a ticker, optionally followed by the benchmark to compare it with.
     A * before the ticker marks a main stock for the dashboard (see watchlist.py); the
     agent tracks every ticker either way. Anything after a # is a comment."""
     entries = []
-    for line in WATCHLIST_FILE.read_text().splitlines():
+    for line in read_watchlist_text().splitlines():
         words = line.split("#", 1)[0].replace("*", " ").upper().split()
         if words:
             entries.append(words)
@@ -115,7 +128,7 @@ def _measure(ticker: str, session: dict) -> tuple[dict, pd.Series | None]:
     Returns the figures, plus the returns they were judged against, by date (today's last).
     The returns let a ticker be compared with its sector and the market on the same days.
     """
-    daily = yf.Ticker(ticker).history(period="3mo")
+    daily = yf.Ticker(ticker).history(period="3mo").dropna(subset=["Close"])  # a day without a price is a missing day
     if len(daily) < 25:
         return {"ticker": ticker, "error": "not enough price history"}, None
     daily.index = _to_et(daily.index)
@@ -158,7 +171,7 @@ def _completed_session_moves(ticker: str, daily: pd.DataFrame, session: dict) ->
 
 def _intraday_moves(ticker: str, daily: pd.DataFrame, session: dict) -> tuple[dict, pd.Series | None]:
     """Today's move so far vs. the same time of day in recent sessions."""
-    bars = yf.Ticker(ticker).history(period="1mo", interval="5m")
+    bars = yf.Ticker(ticker).history(period="1mo", interval="5m").dropna(subset=["Close"])  # e.g. a bar not filled in yet
     if bars.empty:
         return {"ticker": ticker, "error": "no intraday data"}, None
     bars.index = _to_et(bars.index)
@@ -520,6 +533,31 @@ def past_moves(tickers: list[str], kinds: list[str] | None = None) -> dict:
     result = {"horizon_days": followups.SURPRISE_HORIZON, "moves": found}
     if not known:
         result["note"] = "Follow-through hasn't been worked out yet, so there's nothing to compare with."
+    return result
+
+
+@mcp.tool()
+def recent_filings(tickers: list[str], days: int = 3) -> dict:
+    """What companies have filed with the SEC in the last few days: results announcements, other
+    announcements and reports. Give it the flagged tickers. A filing that has been read has a
+    `first_take` (headline, key points, figures and guidance, all checked against the filing in
+    code): use it for "Likely why", cited with the filing's `url`. `expected` lists results the
+    calendar expected in the last few days that hadn't been filed yet.
+    """
+    import filings  # imported here, not at the top, because filings.py imports this module
+    days = max(1, min(int(days), 14))
+    wanted = [t.strip().upper() for t in tickers if t.strip()][:30]
+    try:
+        with closing(reports_db.connect(readonly=True)) as conn:
+            found = {t: filings.recent_for(conn, t, filings._days_ago(days)) for t in wanted}
+            checked = filings.last_check(conn)
+            waiting = [e for e in filings.expected(conn, now_et().date()) if e["ticker"] in wanted]
+    except Exception as e:  # no database yet, or it's busy: the brief just goes without
+        return {"filings": {}, "note": f"Filings aren't available ({e})."}
+    result = {"days": days, "filings": {t: f for t, f in found.items() if f}, "expected": waiting,
+              "checked": checked["finished_at"] if checked else None}
+    if not checked:
+        result["note"] = "Filings haven't been checked yet, so nothing is known about them."
     return result
 
 

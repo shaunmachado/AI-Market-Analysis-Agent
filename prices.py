@@ -29,7 +29,8 @@ def get_prices(ticker: str, period: str) -> list[dict]:
         return cached[1]
     rows = fetch_prices(*key)
     for previous, row in zip([None] + rows, rows):
-        row["change_pct"] = round((row["close"] / previous["close"] - 1) * 100, 2) if previous else None
+        row["change_pct"] = (round((row["close"] / previous["close"] - 1) * 100, 2)
+                             if previous and previous["close"] else None)  # a zero close is bad data: no % change
     if rows:
         _cache[key] = (time.monotonic(), rows)
     return rows

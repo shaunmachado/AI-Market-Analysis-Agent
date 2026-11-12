@@ -56,6 +56,11 @@ export const getStories = (ticker) => request(`/api/stories${ticker ? `?ticker=$
 export const checkStory = (sessionDate, ticker) =>
   post('/api/stories/check', { session_date: sessionDate, ticker }).then((body) => body.check)
 
+// Company filings from the SEC, and Claude's first take on them
+export const getFilings = (ticker) => request(`/api/filings${ticker ? `?ticker=${encodeURIComponent(ticker)}` : ''}`)
+export const checkFilings = () => post('/api/filings/check', {}).then((body) => body.check)
+export const readFiling = (accession) => post('/api/filings/read', { accession }).then((body) => body.read)
+
 export async function startCalendarScan() {
   const response = await postJSON('/api/calendar/scan', {})
   const body = await response.json().catch(() => ({}))

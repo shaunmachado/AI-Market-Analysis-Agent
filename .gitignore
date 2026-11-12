@@ -13,3 +13,8 @@ frontend/dist/
 search.db
 search.db-wal
 search.db-shm
+# Local files: logs, backups of the (ignored) database and watchlist, and IDE tool config
+*.log
+reports.backup.db
+watchlist.backup.txt
+.mcp.json

@@ -323,6 +323,9 @@ def test_api_search(client):
 def test_editing_watchlist_txt_by_hand_updates_open_pages(wl, monkeypatch):
     monkeypatch.setattr(api, "POLL_SECONDS", 0.05)
     monkeypatch.setattr(api, "hub", api.EventHub())
+    # Create the database first. Creating one can take 1.4 s on Windows (SQLite retries deleting its
+    # WAL files while a virus scanner has them open), and the watcher must have looked before the edit.
+    reports_db.connect().close()
 
     async def scenario():
         queue = api.hub.subscribe()

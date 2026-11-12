@@ -16,6 +16,7 @@ Browse from the terminal:
 import argparse
 import os
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -97,23 +98,41 @@ CREATED, UPDATED, FINALIZED = "created", "updated", "finalized"
 SKIPPED_FINAL, SKIPPED_STALE = "skipped_final_exists", "skipped_older_update"
 
 
+# Setting up a brand-new database file from two threads at once fails: "database is locked", or a
+# reader finding the file before its tables exist. The API does exactly that on its first start
+# (its startup index update and the first page load), so within one program, set-up is one at a time.
+# search_index.py uses this lock for search.db too.
+SETUP_LOCK = threading.Lock()
+
+
 def connect(path: Path | None = None, readonly: bool = False) -> sqlite3.Connection:
     """Open the database, creating it and its tables on first use.
 
     readonly=True opens it so that no write is possible (used by the API).
     """
     path = Path(path or DB_PATH)
+    with SETUP_LOCK:
+        if not readonly:
+            conn = _open_and_set_up(path)
+        elif not path.exists():
+            _open_and_set_up(path).close()  # create an empty database first
     if readonly:
-        if not path.exists():
-            connect(path).close()  # create an empty database first
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None)
-    else:
-        conn = sqlite3.connect(path, isolation_level=None, timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def _open_and_set_up(path: Path) -> sqlite3.Connection:
+    """A writable connection, with WAL on and every table present. Call it holding SETUP_LOCK."""
+    conn = sqlite3.connect(path, isolation_level=None, timeout=10)
+    try:
         conn.execute("PRAGMA journal_mode = WAL")  # lets the API read while a run is writing
         conn.executescript(SCHEMA)
         _add_missing_columns(conn)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 

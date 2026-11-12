@@ -24,6 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import market_tools  # noqa: E402
 from mcp import Client  # noqa: E402
 
+# The real yfinance.Ticker, saved now: the fixture below swaps the fake in on the yfinance module
+# itself, so during a test `yfinance.Ticker` is the fake too and can't be used to undo it.
+REAL_TICKER = market_tools.yf.Ticker
+
 ET = ZoneInfo("America/New_York")
 FRIDAY = date(2026, 11, 6)
 DAYS = 63  # about 3 months of trading days
@@ -583,7 +587,8 @@ def test_tools_work_through_mcp(fake_market):
 
     names, result = asyncio.run(run())
 
-    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events", "past_moves"}
+    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events", "past_moves",
+                     "recent_filings"}
     assert not result.is_error
     payload = json.loads(result.content[0].text)  # the JSON text the agent receives
     assert payload["session"]["status"] == "complete"
@@ -592,9 +597,8 @@ def test_tools_work_through_mcp(fake_market):
 
 @pytest.mark.skipif(not os.getenv("LIVE_TESTS"), reason="set LIVE_TESTS=1 to hit Yahoo Finance")
 def test_live_data(monkeypatch):
-    import yfinance
-
-    monkeypatch.setattr(market_tools.yf, "Ticker", yfinance.Ticker)  # undo the fake data
+    assert REAL_TICKER.__module__.startswith("yfinance")  # the real one, not the fake
+    monkeypatch.setattr(market_tools.yf, "Ticker", REAL_TICKER)  # undo the fake data
     monkeypatch.setattr(market_tools, "now_et", lambda: datetime.now(ET))  # undo the fake clock
     session = market_tools.market_session()
     result = market_tools.compute_moves("AAPL")

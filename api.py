@@ -25,6 +25,9 @@ Endpoints:
     POST /api/followups/refresh  fill in follow-through prices now (Yahoo only, free)
     GET  /api/stories?ticker=    story updates (what later news said), and recent moves to check
     POST /api/stories/check      re-check one move's news now: {"session_date": "2026-10-13", "ticker": "MSFT"}
+    GET  /api/filings?ticker=    company filings from the SEC, with first takes, and results expected but not filed
+    POST /api/filings/check      look for new filings now (free; new results announcements are read)
+    POST /api/filings/read       read one filing with Claude now: {"accession": "0000789019-26-000123"}
     GET  /api/events            live updates (Server-Sent Events)
     GET  /api/runs/current      the on-demand run in progress, or the last one
     POST /api/runs              write a fresh report now
@@ -36,6 +39,7 @@ thing that writes reports is a run, through run_brief.py's normal storage rules
 way, by events.py's scan (daily at the market open, or "Update now"). The Stocks tab edits
 watchlist.txt, through watchlist.py's safe edits. Follow-through and story updates are written
 by followups.py and stories.py (after each final report, or "Refresh prices" and "Check for updates").
+Filings and first takes are written by filings.py (before each run, or "Check now" and "Read this filing").
 The API does write the search index (search.db), which is rebuilt from reports.db.
 If frontend/dist exists (after `npm run build`), the app is served at /.
 """
@@ -60,6 +64,8 @@ from starlette.staticfiles import StaticFiles
 
 import alerts
 import ask
+import edgar
+import filings
 import followups
 import market_tools
 import events as upcoming  # events.py ("events" here is the live-updates endpoint)
@@ -71,6 +77,7 @@ import stories
 import watchlist
 
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+ACCESSION = re.compile(r"\d{10}-\d{2}-\d{6}")                              # the SEC's number for a filing
 TICKER = re.compile(r"[A-Za-z0-9.\-^=]{1,15}")
 FRONTEND_ORIGINS = [o.strip() for o in os.environ.get(
     "FRONTEND_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",") if o.strip()]
@@ -86,6 +93,8 @@ AUTO_CLOSE_MAX_ATTEMPTS = 3
 FOLLOWUP_REFRESH_COOLDOWN_SECONDS = int(os.environ.get("FOLLOWUP_REFRESH_COOLDOWN_SECONDS", "60"))
 STORY_CHECK_COOLDOWN_SECONDS = int(os.environ.get("STORY_CHECK_COOLDOWN_SECONDS", "30"))  # each check can cost a few cents
 STORY_DAYS = 30                                                           # recent moves offered for a news check
+FILINGS_CHECK_COOLDOWN_SECONDS = int(os.environ.get("FILINGS_CHECK_COOLDOWN_SECONDS", "60"))
+FILING_READ_COOLDOWN_SECONDS = int(os.environ.get("FILING_READ_COOLDOWN_SECONDS", "30"))  # each read costs a few cents
 MAX_ACTIVE_QUESTIONS = 2
 FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 
@@ -100,7 +109,7 @@ def _error(status_code: int, message: str) -> JSONResponse:
 
 def _limit(request, default: int = 30, maximum: int = 365) -> int:
     raw = request.query_params.get("limit", str(default))
-    if not raw.isdigit() or not 1 <= int(raw) <= maximum:
+    if not (raw.isascii() and raw.isdigit()) or not 1 <= int(raw) <= maximum:  # isdigit() alone accepts "²"
         raise BadRequest(f"limit must be a whole number from 1 to {maximum}")
     return int(raw)
 
@@ -242,8 +251,9 @@ def calendar(request):
     with _db() as conn:
         found = upcoming.events_between(conn, first.isoformat(), last.isoformat())
         scanned = upcoming.last_scan(conn)
+        reported = filings.for_calendar(conn, found, first.isoformat(), last.isoformat())  # results actually filed
     return JSONResponse({"today": today.isoformat(), "start": first.isoformat(), "end": last.isoformat(),
-                         "events": found, "last_scan": scanned, "scan": calendar_scans.snapshot()})
+                         "events": found, "reported": reported, "last_scan": scanned, "scan": calendar_scans.snapshot()})
 
 
 def search_reports(request):
@@ -467,6 +477,17 @@ def _latest_followups() -> tuple:
     return update, checked
 
 
+def _latest_filings() -> tuple:
+    """Changes whenever any program lists a new filing, finishes a read, or confirms figures."""
+    with _db() as conn:
+        try:
+            return (conn.execute("SELECT MAX(id) FROM filing_checks").fetchone()[0],
+                    conn.execute("SELECT MAX(id) FROM filing_reads WHERE finished_at IS NOT NULL").fetchone()[0],
+                    conn.execute("SELECT COUNT(*) FROM filings").fetchone()[0])
+        except Exception:  # not set up yet
+            return (None, None, None)
+
+
 def _latest_change() -> dict | None:
     """The most recently saved report: changes whenever any run saves (scheduled or on demand)."""
     with _db() as conn:
@@ -484,15 +505,18 @@ async def watch_reports() -> None:
             return None
 
     def check():  # all in one trip to a worker thread
-        return _latest_change(), _latest_calendar_scan(), watchlist_stamp(), _latest_followups()
+        return _latest_change(), _latest_calendar_scan(), watchlist_stamp(), _latest_followups(), _latest_filings()
 
-    last, last_scan, last_stamp, last_followed = await asyncio.to_thread(check)
+    last, last_scan, last_stamp, last_followed, last_filed = await asyncio.to_thread(check)
     while True:
         await asyncio.sleep(POLL_SECONDS)
         try:
-            current, scan, stamp, followed = await asyncio.to_thread(check)
+            current, scan, stamp, followed, filed = await asyncio.to_thread(check)
         except Exception:  # e.g. the database is briefly locked; try again next time
             continue
+        if filed != last_filed:  # a new filing, a first take, or figures confirmed (by any program)
+            last_filed = filed
+            hub.publish({"type": "filings_updated"})
         if followed != last_followed:  # follow-through updated, or a story checked
             if followed[0] != last_followed[0]:
                 hub.publish({"type": "followups_updated"})
@@ -751,7 +775,7 @@ def _followups_view(horizon: int, ticker: str | None) -> dict:
 async def followups_view(request):
     raw = request.query_params.get("horizon", str(followups.SURPRISE_HORIZON))
     ticker = request.query_params.get("ticker") or None
-    if not raw.isdigit() or int(raw) not in followups.HORIZONS:
+    if not (raw.isascii() and raw.isdigit()) or int(raw) not in followups.HORIZONS:
         return _error(400, f"horizon must be one of: {', '.join(map(str, followups.HORIZONS))}")
     if ticker and not TICKER.fullmatch(ticker):
         return _error(400, "invalid ticker")
@@ -813,6 +837,71 @@ async def check_story(request):
     except TooSoon as e:
         return _error(429, str(e))
     return JSONResponse({"check": job}, status_code=202)
+
+
+# ---------------------------------------------------------------------------
+# Company filings (the Filings tab)
+# ---------------------------------------------------------------------------
+
+filing_checks = BackgroundJob("filings_check", lambda: FILINGS_CHECK_COOLDOWN_SECONDS,
+                              "Filings are already being checked.", "Filings were just checked. Try again in {}.")
+filing_reads = BackgroundJob("filing_read", lambda: FILING_READ_COOLDOWN_SECONDS,
+                             "A filing is already being read. Its progress is shown on the Filings tab.",
+                             "A filing was just read. Try again in {}.")
+
+
+def _filings_view(ticker: str | None) -> dict:
+    with _db() as conn:
+        every = filings.list_filings(conn)
+        return {"filings": [f for f in every if not ticker or f["ticker"] == ticker.upper()],
+                "tickers": sorted({f["ticker"] for f in every}),
+                "expected": filings.expected(conn, upcoming.today_et()), "not_covered": filings.not_covered(conn),
+                "checked": filings.last_check(conn), "check": filing_checks.snapshot(), "read": filing_reads.snapshot(),
+                "max_cost_usd": filings.READ_BUDGET_USD, "automatic_days": filings.AUTOMATIC_WITHIN_DAYS,
+                "contact_set": edgar.contact_set()}
+
+
+async def filings_view(request):
+    ticker = request.query_params.get("ticker") or None
+    if ticker and not TICKER.fullmatch(ticker):
+        return _error(400, "invalid ticker")
+    return JSONResponse(await asyncio.to_thread(_filings_view, ticker))
+
+
+async def check_filings(request):
+    if blocked := _post_guard(request):
+        return blocked
+    try:
+        job = filing_checks.start(lambda emit: filings.check("manual", emit))
+    except AlreadyRunning as e:
+        return _error(409, str(e))
+    except TooSoon as e:
+        return _error(429, str(e))
+    return JSONResponse({"check": job}, status_code=202)
+
+
+async def read_filing(request):
+    if blocked := _post_guard(request):
+        return blocked
+    try:
+        body = await request.json()
+    except ValueError:
+        return _error(400, 'send JSON like {"accession": "0000789019-26-000123"}')
+    accession = body.get("accession") if isinstance(body, dict) else None
+    if not isinstance(accession, str) or not ACCESSION.fullmatch(accession):
+        return _error(400, 'send JSON like {"accession": "0000789019-26-000123"}')
+    with _db() as conn:  # a quick check first, so a wrong number is refused straight away
+        known = filings.get_filing(conn, accession)
+    if not known:
+        return _error(404, f"No filing {accession} is listed. Check for new filings first.")
+    try:
+        job = filing_reads.start(lambda emit: filings.read(accession, "manual", emit),
+                                 target={"accession": accession, "ticker": known["ticker"]})
+    except AlreadyRunning as e:
+        return _error(409, str(e))
+    except TooSoon as e:
+        return _error(429, str(e))
+    return JSONResponse({"read": job}, status_code=202)
 
 
 active_questions = 0
@@ -944,6 +1033,9 @@ def create_app(frontend_dist: Path = FRONTEND_DIST) -> Starlette:
         Route("/api/followups/refresh", refresh_followups, methods=["POST"]),
         Route("/api/stories", stories_view, methods=["GET"]),
         Route("/api/stories/check", check_story, methods=["POST"]),
+        Route("/api/filings", filings_view, methods=["GET"]),
+        Route("/api/filings/check", check_filings, methods=["POST"]),
+        Route("/api/filings/read", read_filing, methods=["POST"]),
         Route("/api/events", events),
         Route("/api/runs", start_run, methods=["POST"]),
         Route("/api/runs/current", current_run),

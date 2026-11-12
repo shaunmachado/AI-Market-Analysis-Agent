@@ -40,7 +40,18 @@ function publishedOn(value) {
   return /^\d{4}-\d{2}-\d{2}/.test(value || '') ? value.slice(0, 10) : null
 }
 
-function EventCard({ event }) {
+// "Reported Oct 28: headline" under an earnings event, or on the day results were filed
+function Reported({ filing, eventDate }) {
+  return (
+    <p className="cal-reported">
+      <strong>Reported{filing.filing_date !== eventDate ? ` on ${formatShortDate(filing.filing_date)}` : ''}:</strong>{' '}
+      {filing.headline || 'Results were filed with the SEC.'}{' '}
+      <a href={routes.filings(filing.accession)}>{filing.headline ? 'First take' : 'See the filing'}</a>
+    </p>
+  )
+}
+
+function EventCard({ event, reported }) {
   return (
     <article className="cal-event">
       <div className="cal-event-head">
@@ -50,6 +61,7 @@ function EventCard({ event }) {
       </div>
       <h3>{event.title}</h3>
       {event.date_note && <p className="muted small">{event.date_note}</p>}
+      {reported && <Reported filing={reported} eventDate={event.event_date} />}
       {event.details && <p>{event.details}</p>}
       {event.news_note && (
         <p>
@@ -85,6 +97,7 @@ export default function CalendarTab({ selectedDate, version, scan, onScanStarted
   const [month, setMonth] = useState(() => (selectedDate || localToday()).slice(0, 7))
   const [data, setData] = useState(null)
   const [dayEvents, setDayEvents] = useState(null)
+  const [dayReported, setDayReported] = useState([])
   const [error, setError] = useState(null)
   const [starting, setStarting] = useState(false)
   const dayRef = useRef(null)
@@ -118,7 +131,11 @@ export default function CalendarTab({ selectedDate, version, scan, onScanStarted
     let current = true
     setDayEvents(null)
     getCalendar(selectedDate, selectedDate)
-      .then((body) => current && setDayEvents(body.events))
+      .then((body) => {
+        if (!current) return
+        setDayEvents(body.events)
+        setDayReported(body.reported || [])
+      })
       .catch((e) => current && setError(e.message))
     return () => {
       current = false
@@ -146,6 +163,11 @@ export default function CalendarTab({ selectedDate, version, scan, onScanStarted
 
   const byDay = {}
   for (const e of data?.events || []) (byDay[e.event_date] ||= []).push(e)
+  // Results show on the day they were actually filed too, in case the calendar's date was out (or missing)
+  for (const r of data?.reported || []) (byDay[r.filing_date] ||= []).push({ ticker: r.ticker, company: r.company })
+  const reportedFor = new Map(dayReported.filter((r) => r.event_id != null).map((r) => [r.event_id, r]))
+  const dayIds = new Set((dayEvents || []).map((e) => e.id))
+  const filedToday = dayReported.filter((r) => r.filing_date === selectedDate && !dayIds.has(r.event_id))
   const last = data?.last_scan
   const status = running
     ? scan.message || 'Updating…'
@@ -229,7 +251,8 @@ export default function CalendarTab({ selectedDate, version, scan, onScanStarted
         </div>
         <p className="muted small cal-note">
           Earnings and ex-dividend dates come from Yahoo Finance. Other events are found in recent news, each with a
-          link to its source. The calendar updates every trading day when the market opens.
+          link to its source. The calendar updates every trading day when the market opens. Once a company files its
+          results with the SEC, its day says “Reported”, with a link to the filing.
         </p>
       </section>
 
@@ -243,10 +266,25 @@ export default function CalendarTab({ selectedDate, version, scan, onScanStarted
           </div>
           {dayEvents === null ? (
             <p className="muted">Loading…</p>
-          ) : dayEvents.length === 0 ? (
+          ) : dayEvents.length === 0 && filedToday.length === 0 ? (
             <p className="muted">Nothing on the calendar for this day.</p>
           ) : (
-            dayEvents.map((e) => <EventCard key={e.id} event={e} />)
+            <>
+              {dayEvents.map((e) => (
+                <EventCard key={e.id} event={e} reported={reportedFor.get(e.id)} />
+              ))}
+              {filedToday.map((r) => (
+                <article key={r.accession} className="cal-event">
+                  <div className="cal-event-head">
+                    <strong>{r.company}</strong>
+                    <span className="muted small">{r.ticker}</span>
+                    <span className="kind kind-earnings">Reported</span>
+                  </div>
+                  <h3>Results announced</h3>
+                  <Reported filing={r} eventDate={selectedDate} />
+                </article>
+              ))}
+            </>
           )}
         </section>
       )}

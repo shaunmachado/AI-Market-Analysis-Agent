@@ -76,10 +76,15 @@ def index_path() -> Path:
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(path or index_path(), timeout=10, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.executescript(SCHEMA)
+    with reports_db.SETUP_LOCK:  # two threads setting up a new search.db at once fails (see reports_db.py)
+        conn = sqlite3.connect(path or index_path(), timeout=10, isolation_level=None)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.executescript(SCHEMA)
+        except BaseException:
+            conn.close()
+            raise
     return conn
 
 

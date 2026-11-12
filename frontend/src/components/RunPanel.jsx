@@ -9,6 +9,7 @@ const STEP_NAMES = {
   market_backdrop: () => 'Checking the market and sectors',
   upcoming_events: () => 'Checking the events calendar',
   past_moves: () => 'Checking how past moves played out',
+  recent_filings: () => 'Checking company filings',
 }
 
 function describe(event) {

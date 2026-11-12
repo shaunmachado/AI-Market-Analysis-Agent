@@ -25,6 +25,8 @@ export default function ComingUp({ version }) {
   const last = new Date(`${data.today}T12:00:00`)
   last.setDate(last.getDate() + DAYS)
   const soon = data.events.filter((e) => e.event_date >= data.today && e.event_date <= isoDay(last))
+  // Results that have since been filed: the event links to its filing instead
+  const reported = new Map((data.reported || []).filter((r) => r.event_id != null).map((r) => [r.event_id, r]))
 
   return (
     <section className="panel coming-up" aria-label="Coming up">
@@ -40,16 +42,20 @@ export default function ComingUp({ version }) {
         </p>
       ) : (
         <ul>
-          {soon.slice(0, MAX_SHOWN).map((e) => (
-            <li key={e.id}>
-              <a href={routes.calendar(e.event_date)}>
-                <span className="cu-date">{e.event_date === data.today ? 'Today' : formatWeekdayDate(e.event_date)}</span>
-                <span className="cu-what">
-                  <strong>{e.company}</strong> <span className="muted">{e.title}</span>
-                </span>
-              </a>
-            </li>
-          ))}
+          {soon.slice(0, MAX_SHOWN).map((e) => {
+            const filed = reported.get(e.id)
+            return (
+              <li key={e.id}>
+                <a href={filed ? routes.filings(filed.accession) : routes.calendar(e.event_date)}>
+                  <span className="cu-date">{e.event_date === data.today ? 'Today' : formatWeekdayDate(e.event_date)}</span>
+                  <span className="cu-what">
+                    <strong>{e.company}</strong>{' '}
+                    <span className="muted">{filed ? (filed.headline ? 'Reported: first take ready' : 'Reported: results filed') : e.title}</span>
+                  </span>
+                </a>
+              </li>
+            )
+          })}
         </ul>
       )}
       {soon.length > MAX_SHOWN && (

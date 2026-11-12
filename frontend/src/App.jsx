@@ -6,6 +6,7 @@ import { routes, useRoute } from './useRoute'
 import AskPanel from './components/AskPanel'
 import CalendarTab from './components/CalendarTab'
 import ComingUp from './components/ComingUp'
+import FilingsTab from './components/FilingsTab'
 import FollowThroughTab from './components/FollowThroughTab'
 import PreviousDaysPreview from './components/PreviousDaysPreview'
 import PreviousDaysTab from './components/PreviousDaysTab'
@@ -29,6 +30,9 @@ export default function App() {
   const [refreshJob, setRefreshJob] = useState(null) // "Refresh prices" on the Follow-through tab
   const [storiesVersion, setStoriesVersion] = useState(0) // tells the Story updates tab to reload
   const [storyJob, setStoryJob] = useState(null) // "Check for updates" on the Story updates tab
+  const [filingsVersion, setFilingsVersion] = useState(0) // tells the Filings tab to reload
+  const [filingsCheck, setFilingsCheck] = useState(null) // "Check now" on the Filings tab
+  const [filingRead, setFilingRead] = useState(null) // "Read this filing"
   const chartOpener = useRef(null) // gets focus back when the chart closes
 
   const openChart = useCallback((ticker, opener) => {
@@ -100,6 +104,15 @@ export default function App() {
     } else if (event.type === 'story_checked') {
       setStoriesVersion((v) => v + 1)
       setFollowVersion((v) => v + 1)
+    } else if (event.type === 'filings_check') {
+      setFilingsCheck(event.job)
+      if (event.job.state !== 'running') setFilingsVersion((v) => v + 1)
+    } else if (event.type === 'filing_read') {
+      setFilingRead(event.job)
+      if (event.job.state !== 'running') setFilingsVersion((v) => v + 1)
+    } else if (event.type === 'filings_updated') {
+      setFilingsVersion((v) => v + 1) // a new filing or first take, from "Check now", a run, or another program
+      setCalendarVersion((v) => v + 1) // the calendar shows what was reported
     }
   })
 
@@ -112,6 +125,10 @@ export default function App() {
     setRefreshJob((current) => (current && current.started_at === started.started_at ? current : started))
   const onStoryCheckStarted = (started) =>
     setStoryJob((current) => (current && current.started_at === started.started_at ? current : started))
+  const onFilingsCheckStarted = (started) =>
+    setFilingsCheck((current) => (current && current.started_at === started.started_at ? current : started))
+  const onFilingReadStarted = (started) =>
+    setFilingRead((current) => (current && current.started_at === started.started_at ? current : started))
 
   const tabLink = (tab, href, label) => (
     <a href={href} className={`tab ${route.tab === tab ? 'active' : ''}`} aria-current={route.tab === tab ? 'page' : undefined}>
@@ -131,6 +148,7 @@ export default function App() {
             {tabLink('stocks', routes.stocks, 'Stocks')}
             {tabLink('followthrough', routes.followThrough, 'Follow-through')}
             {tabLink('stories', routes.stories(), 'Story updates')}
+            {tabLink('filings', routes.filings(), 'Filings')}
           </nav>
           <span className={`connection ${connected ? 'on' : 'off'}`}>
             {connected ? 'Live' : 'Reconnecting…'}
@@ -190,6 +208,17 @@ export default function App() {
             job={storyJob}
             onCheckStarted={onStoryCheckStarted}
             picked={route.tab === 'stories' ? { date: route.date, ticker: route.ticker } : null}
+          />
+        </div>
+
+        <div hidden={route.tab !== 'filings'}>
+          <FilingsTab
+            version={filingsVersion}
+            checkJob={filingsCheck}
+            readJob={filingRead}
+            onCheckStarted={onFilingsCheckStarted}
+            onReadStarted={onFilingReadStarted}
+            picked={route.tab === 'filings' ? route.accession : null}
           />
         </div>
 

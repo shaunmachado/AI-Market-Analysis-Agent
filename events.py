@@ -311,12 +311,12 @@ def validate(raw_events: list, articles: list[dict], companies: dict[str, str], 
             dropped.append(f"{label}: not a watchlist ticker")
             continue
         refs = raw.get("sources")
-        refs = [r for r in refs if isinstance(r, int) and 1 <= r <= len(articles)] if isinstance(refs, list) else []
+        refs = [r for r in refs if type(r) is int and 1 <= r <= len(articles)] if isinstance(refs, list) else []  # not bool: True isn't article 1
         if not refs:
             dropped.append(f"{label}: no valid article cited")
             continue
         same_as = raw.get("same_as")
-        target = known.get(same_as) if isinstance(same_as, int) else None
+        target = known.get(same_as) if type(same_as) is int else None
         if target and target["ticker"] != ticker:
             target = None
         if target and target["kind"] != "news":  # extra news for an earnings or dividend date: date stays as is

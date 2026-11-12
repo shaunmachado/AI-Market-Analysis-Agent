@@ -395,8 +395,11 @@ def client(cal, monkeypatch):
         yield test_client
 
 
-def wait_for_scan(client):
-    for _ in range(100):
+def wait_for_scan(client, timeout=20.0):
+    # Usually well under a second. The long limit is for Windows, where creating or closing a
+    # database can stall for about 1.4 s at a time (see BUG-13 in test-case-reporting.md).
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         scan = client.get("/api/calendar/scan").json()["scan"]
         if scan["state"] in ("finished", "failed"):
             return scan

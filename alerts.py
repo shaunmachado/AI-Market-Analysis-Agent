@@ -241,8 +241,9 @@ def summary_payload(report: dict, upcoming: list[dict] = ()) -> dict:
     for t in flagged:
         read = f" · {t['move_read']}" if t.get("move_read") else ""
         why = likely_why(report["body_md"], t["ticker"])
-        lines.append(f"**{t['ticker']}** {t['return_1d_pct']:+.2f}% (z-score {t['return_zscore']}){read}"
-                     + (f"\n{_shorten(why, 300)}" if why else ""))
+        move = "" if t["return_1d_pct"] is None else f" {t['return_1d_pct']:+.2f}%"  # a figure can be missing
+        z = "" if t["return_zscore"] is None else f" (z-score {t['return_zscore']})"
+        lines.append(f"**{t['ticker']}**{move}{z}{read}" + (f"\n{_shorten(why, 300)}" if why else ""))
     if not flagged:
         lines.append("Nothing unusual today.")
     quiet = [f"{t['ticker']} {t['return_1d_pct']:+.2f}%" for t in tickers

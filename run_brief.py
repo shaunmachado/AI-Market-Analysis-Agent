@@ -10,9 +10,10 @@ Auth: if MARKET_AGENT_ANTHROPIC_KEY is set (in .env or the environment), this
 script bills that API key. Otherwise it uses your Claude Code login (subscription).
 The key is handed only to the Claude process this script starts; a global
 ANTHROPIC_API_KEY is ignored, so your own Claude Code sessions keep using Pro.
-After saving, it sends any Discord alerts the report calls for (see alerts.py). After a final
-report, it also fills in the follow-through of earlier flagged moves (followups.py) and checks
-the news on any that turned out to be surprises (stories.py).
+Before writing, it looks for new company filings (filings.py), so the brief can explain a move
+from the company's own announcement. After saving, it sends any Discord alerts the report calls
+for (see alerts.py). After a final report, it also fills in the follow-through of earlier flagged
+moves (followups.py) and checks the news on any that turned out to be surprises (stories.py).
 
 Usage:
     claude login   # once, if you're not using an API key
@@ -50,6 +51,7 @@ from claude_agent_sdk import (  # noqa: E402
 )
 
 import alerts  # noqa: E402
+import filings  # noqa: E402
 import reports_db  # noqa: E402
 import search_index  # noqa: E402
 import stories  # noqa: E402
@@ -59,7 +61,7 @@ HERE = Path(__file__).parent
 BASE_TURNS = 25  # enough for a small watchlist; turn_limit() adds room as the list grows
 
 options = ClaudeAgentOptions(
-    system_prompt=(HERE / "analyst_prompt.md").read_text(),
+    system_prompt=(HERE / "analyst_prompt.md").read_text(encoding="utf-8"),
     mcp_servers={
         "market": {
             "type": "stdio",
@@ -76,6 +78,7 @@ options = ClaudeAgentOptions(
         "mcp__market__get_news",
         "mcp__market__upcoming_events",
         "mcp__market__past_moves",
+        "mcp__market__recent_filings",
     ],
     max_turns=BASE_TURNS,    # each run uses turn_limit() instead (below)
     max_budget_usd=1.00,     # hard stop on cost per run
@@ -140,6 +143,9 @@ async def run_once(emit=None) -> dict:
     now = now_et()
     session = await asyncio.to_thread(market_session)  # checked first, so a data outage costs nothing
     session_date, status = report_key(session)
+    # New filings first (free; a results announcement is read by Claude), so the brief can use them.
+    # This runs even when the report is already saved: results often arrive after the close.
+    await asyncio.to_thread(filings.check_before_run, emit)
 
     if status == "final":
         with closing(reports_db.connect()) as conn:

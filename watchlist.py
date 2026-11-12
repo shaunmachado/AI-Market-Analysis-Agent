@@ -62,7 +62,7 @@ def _parse(line: str) -> dict | None:
 
 def entries() -> list[dict]:
     """Every tracked stock in file order: ticker, benchmark, and whether it's a main stock."""
-    found = [e for e in (_parse(line) for line in _path().read_text().splitlines()) if e]
+    found = [e for e in (_parse(line) for line in market_tools.read_watchlist_text().splitlines()) if e]
     any_star = any(e["starred"] for e in found)
     for i, e in enumerate(found):
         e["main"] = e["starred"] if any_star else i < MAX_MAIN
@@ -77,6 +77,23 @@ def main_tickers() -> list[str]:
 # Editing
 # ---------------------------------------------------------------------------
 
+REPLACE_ATTEMPTS, REPLACE_WAIT_SECONDS = 40, 0.05  # up to about 2 seconds in all
+
+
+def _replace(temp: str, path) -> None:
+    """os.replace, tried again for a moment if it's refused. On Windows a file can't be replaced while
+    anything else has it open: a run or the API reading the list at that instant, or a virus scanner
+    looking at the new file. That passes in milliseconds, so the edit waits instead of failing."""
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(REPLACE_WAIT_SECONDS)
+
+
 def _write(lines: list[str]) -> None:
     """Replace the file in one step (write a temporary file, then swap it in)."""
     path = _path()
@@ -88,7 +105,7 @@ def _write(lines: list[str]) -> None:
             os.chmod(temp, path.stat().st_mode & 0o777)  # keep the file's permissions
         except OSError:
             pass
-        os.replace(temp, path)
+        _replace(temp, path)
     except BaseException:
         if os.path.exists(temp):
             os.unlink(temp)
@@ -108,7 +125,7 @@ def _edit(change) -> list[dict]:
     """Read the file, apply change(lines, rows, current) and write it back, all under the lock.
     rows maps each ticker to its line number; current is the list as entries() gives it."""
     with _lock:
-        lines = _path().read_text().splitlines()
+        lines = market_tools.read_watchlist_text().splitlines()
         rows = {}
         for i, line in enumerate(lines):
             parsed = _parse(line)
@@ -157,7 +174,7 @@ def remove(ticker: str) -> None:
     def change(lines, rows, current):
         if ticker not in rows:
             raise WatchlistError(f"{ticker} isn't on your list.", 404)
-        del lines[rows[ticker]]
+        lines[:] = [line for line in lines if (_parse(line) or {}).get("ticker") != ticker]  # every copy, if added twice
 
     _edit(change)
 

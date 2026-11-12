@@ -1,8 +1,8 @@
 # Market Analyst Agent: Testing Guide
 
-How to test the market analyst agent, from quick offline checks to full runs with Claude, Discord alerts, the events calendar, tracked stocks, follow-through and story updates, and the schedule.
+How to test the market analyst agent, from quick offline checks to full runs with Claude, Discord alerts, the events calendar, tracked stocks, follow-through and story updates, company filings, and the schedule.
 
-This version covers the whole project, up to the guide that adds follow-through and story updates (`market-agent-followups.md`). For trying the app on two months of sample data, see `market-agent-test-enviro.md`. For the public live demo, see `market-agent-demo.md`.
+This version covers the whole project, up to the guide that adds company filings and first takes (`market-agent-filings.md`). For trying the app on two months of sample data, see `market-agent-test-enviro.md`. For the public live demo, see `market-agent-demo.md`.
 
 ---
 
@@ -14,7 +14,7 @@ This version covers the whole project, up to the guide that adds follow-through 
 4. [Live data check](#4-live-data-check)
 5. [Manual tool check with the MCP Inspector](#5-manual-tool-check-with-the-mcp-inspector)
 6. [Agent test runs](#6-agent-test-runs)
-7. [Alerts, calendar, Stocks tab and follow-through checks](#7-alerts-calendar-stocks-tab-and-follow-through-checks)
+7. [Alerts, calendar, Stocks tab, follow-through and filings checks](#7-alerts-calendar-stocks-tab-follow-through-and-filings-checks)
 8. [Schedule test](#8-schedule-test)
 9. [Quality log](#9-quality-log)
 10. [Testing a new tool](#10-testing-a-new-tool)
@@ -29,13 +29,14 @@ Test in layers, from fastest to slowest. Each layer catches a different kind of 
 
 | Layer | What it checks | Needs | When to run it |
 |---|---|---|---|
-| Offline tests | Tool math, sector verdicts, storage rules, API, search, alerts, the events calendar, tracked stocks, follow-through and story updates | Nothing | After every code change |
-| Live data check | Yahoo Finance returns real data, including sectors, sector ETFs, company calendars and stock search | Internet | Once at setup, then if data looks wrong |
+| Offline tests | Tool math, sector verdicts, storage rules, API, search, alerts, the events calendar, tracked stocks, follow-through and story updates, company filings | Nothing | After every code change |
+| Live data check | Yahoo Finance returns real data, including sectors, sector ETFs, company calendars and stock search. The SEC returns real filings and figures | Internet (and `SEC_CONTACT` for the SEC) | Once at setup, then if data looks wrong |
 | MCP Inspector | The tools work the way Claude will see them | Node.js, internet | After changing a tool |
 | Agent test runs | Claude uses the tools well and writes a good brief | API key (uses credits) | After changing the prompt or tools |
 | Alerts check | Messages reach your Discord channel and phone | A Discord webhook | Once at setup, then after changing alerts |
 | Calendar check | Real earnings dates and news events are right, with working links | API key (a few cents a scan) | Once at setup, then now and then |
 | Follow-through check | Real later prices match Yahoo, and story updates report what newer headlines say, with working links | API key (a few cents a check) | Once at setup, then now and then |
+| Filings check | Real filings are listed, a first take quotes the filing word for word, and figures match the press release | `SEC_CONTACT`, and an API key (a few cents a read) | Once at setup, then each results season |
 | Schedule test | The scheduled job actually runs, with all its keys | Cron or Task Scheduler | Once, when setting up the schedule |
 | Quality log | The briefs and alerts are useful over time | Your judgment | Daily for the first week or two |
 
@@ -49,6 +50,7 @@ Test in layers, from fastest to slowest. Each layer catches a different kind of 
 | Alerts check | Offline alert tests | The webhook address, or the network to Discord |
 | Calendar check | Offline calendar tests | Yahoo's data, or what Claude reads in the news (check the "left out" lines and the links) |
 | Follow-through check | Offline follow-through tests | Yahoo's prices or headlines, or what Claude makes of them (open the sources) |
+| Filings check | Offline filings tests | The SEC's data (run the live filings test), or what Claude makes of a filing (open its quotes) |
 | Schedule test | Manual agent run | The scheduler: paths, keys missing from its environment, or the computer asleep |
 
 ---
@@ -69,7 +71,8 @@ market-agent/
     ├── test_events.py              the events calendar: Yahoo dates, news events, checks, API
     ├── test_calendar_links.py      the calendar in briefs, Discord alerts, Ask and search
     ├── test_watchlist.py           tracked and main stocks: the watchlist file, search, API, longer lists
-    └── test_followups.py           follow-through and story updates: judging moves, prices, checks, API, Ask
+    ├── test_followups.py           follow-through and story updates: judging moves, prices, checks, API, Ask
+    └── test_filings.py             company filings: reading the SEC, first takes, figures, calendar, Discord, API
 ```
 
 | File | Tests | Comes from |
@@ -85,18 +88,19 @@ market-agent/
 | `test_calendar_links.py` | 13 | `market-agent-calendar-connect.md` |
 | `test_watchlist.py` | 33, plus 1 live check | `market-agent-stocks.md` |
 | `test_followups.py` | 35 | `market-agent-followups.md` |
-| `conftest.py` | (shared setup) | `market-agent-followups.md` (first added in `market-agent-alerts.md`) |
+| `test_filings.py` | 139, plus 1 live check | `market-agent-filings.md` |
+| `conftest.py` | (shared setup) | `market-agent-filings.md` (first added in `market-agent-alerts.md`) |
 
-The test environment and the live demo have their own tests, in their own folders: `pytest -v` in `market-agent-testenv/` gives `33 passed` (`market-agent-test-enviro.md`), and in `market-agent-demo/` gives `17 passed` (`market-agent-demo.md`).
+The test environment and the live demo have their own tests, in their own folders: `pytest -v` in `market-agent-testenv/` gives `40 passed` (`market-agent-test-enviro.md`), and in `market-agent-demo/` gives `18 passed` (`market-agent-demo.md`).
 
-To create or update `test_market_tools.py`, replace its contents with the code from the [appendix](#appendix-test-file-source). **It matches `market_tools.py` from the sector context guide onwards.** With an older `market_tools.py`, its 13 sector-context tests fail. Its MCP check expects all six tools, including `past_moves` from the follow-through guide: before that guide, it's the one test that fails.
+To create or update `test_market_tools.py`, replace its contents with the code from the [appendix](#appendix-test-file-source). **It matches `market_tools.py` from the sector context guide onwards.** With an older `market_tools.py`, its 13 sector-context tests fail. Its MCP check expects all seven tools, including `past_moves` from the follow-through guide and `recent_filings` from the filings guide: before those guides, it's the one test that fails.
 
 **How the tests work:**
 
 - **Market data is faked.** yfinance is swapped for a fake that returns made-up daily prices, 5-minute bars, news and company profiles (for sectors), in the same shape as the real thing.
 - **The clock is faked.** "Market open", "weekend", "holiday" and "early close" can be tested on any day.
 - **Nothing real is touched.** The tests use a temporary watchlist and temporary databases, so your real `watchlist.txt` and `reports.db` are never touched.
-- **Claude, Voyage and Discord are faked.** `conftest.py` removes `DISCORD_WEBHOOK_URL` and `VOYAGE_API_KEY` for every test, so tests can't reach them even if they're set in your terminal. It also stops runs in other tests from following up after a final report, which would download prices; `test_followups.py` fakes those itself.
+- **Claude, Voyage and Discord are faked.** `conftest.py` removes `DISCORD_WEBHOOK_URL` and `VOYAGE_API_KEY` for every test, so tests can't reach them even if they're set in your terminal. It also removes `SEC_CONTACT`, so no test can reach the SEC. And it stops runs in other tests from following up after a final report (which would download prices) and from looking for filings first (which would ask the SEC); `test_followups.py` and `test_filings.py` fake those themselves.
 
 Results are the same on every run, and no internet or keys are needed.
 
@@ -111,7 +115,7 @@ pip install pytest
 pytest -v
 ```
 
-**Expected result:** `276 passed, 3 skipped`. The skipped tests are the three live data checks in section 4.
+**Expected result:** `415 passed, 4 skipped`. The skipped tests are the four live data checks in section 4.
 
 If you're partway through the guides, the total so far:
 
@@ -124,6 +128,7 @@ If you're partway through the guides, the total so far:
 | `market-agent-calendar-connect.md` | `208 passed, 2 skipped` |
 | `market-agent-stocks.md` | `241 passed, 3 skipped` |
 | `market-agent-followups.md` | `276 passed, 3 skipped` |
+| `market-agent-filings.md` | `415 passed, 4 skipped` |
 
 To run one area only, name its file: `pytest -v tests/test_market_tools.py` should give `34 passed, 1 skipped`.
 
@@ -186,7 +191,7 @@ To run one area only, name its file: `pytest -v tests/test_market_tools.py` shou
 | Test | Proves that |
 |---|---|
 | `test_news_handles_both_yfinance_formats_and_caps_limit` | Both yfinance news formats are read, summaries are trimmed and results are capped at 10 |
-| `test_tools_work_through_mcp` | All six tools work through a real MCP client, the same way the agent calls them |
+| `test_tools_work_through_mcp` | All seven tools work through a real MCP client, the same way the agent calls them |
 | `test_live_data` | Real data comes back from Yahoo Finance, including Apple's sector ETF and the backdrop (skipped unless you turn it on) |
 
 **Tip: check the tests catch real bugs.** Make one of these temporary changes in `market_tools.py`, run `pytest tests/test_market_tools.py`, then change it back:
@@ -199,7 +204,7 @@ To run one area only, name its file: `pytest -v tests/test_market_tools.py` shou
 | In `describe_context`: `if abs(gap_z) >= CONTEXT_Z:` → `if False:` | The stock-specific and intraday context tests |
 | In `flag_events`: pass `{}` instead of `measured` to `_context` | `test_each_benchmark_is_downloaded_once_per_scan` |
 
-The alerts guide (section 11.1), the calendar guide (section 10.1) and the follow-through guide (section 11.1) have the same kind of checks for `alerts.py`, `events.py`, `followups.py` and `stories.py`.
+The alerts guide (section 11.1), the calendar guide (section 10.1), the follow-through guide (section 11.1) and the filings guide (section 12.3) have the same kind of checks for `alerts.py`, `events.py`, `followups.py`, `stories.py`, `edgar.py` and `filings.py`.
 
 ---
 
@@ -212,6 +217,7 @@ This fetches real data from Yahoo Finance and prints it:
 - The market backdrop.
 - Apple's company calendar (earnings and dividend dates).
 - Yahoo's search for "costco", as the Stocks tab uses it.
+- From the SEC: Apple's latest filings, the documents in its latest results announcement, and its quarterly revenue.
 
 **macOS / Linux**
 
@@ -225,11 +231,12 @@ LIVE_TESTS=1 pytest -v -s -k live
 $env:LIVE_TESTS=1; pytest -v -s -k live
 ```
 
-**Expected result:** `3 passed`. You'll see:
+**Expected result:** `4 passed`, with `SEC_CONTACT` set (step 5 of the filings guide). Without it, the SEC check is skipped and you'll see `3 passed, 1 skipped`. You'll see:
 
 - from `test_live_data`: `Live session`, `Live AAPL`, `Live AAPL vs. sector` and `Live backdrop`
 - from `test_live_calendar_data`: `Yahoo's calendar for AAPL` and `Events from it`
 - from `test_live_search`: your yfinance version, `Yahoo's matches for 'costco'` and `Checked:`
+- from `test_live_filings`: Apple's latest filings, the documents in its results announcement, the start of the press release, and five quarters of revenue
 
 It downloads about 15 tickers, so it takes a few seconds.
 
@@ -374,7 +381,7 @@ Each scenario tests a different part of the brief. Make the change, run `python 
 
 ---
 
-## 7. Alerts, calendar, Stocks tab and follow-through checks
+## 7. Alerts, calendar, Stocks tab, follow-through and filings checks
 
 ### 7.1 Alerts
 
@@ -449,6 +456,19 @@ Do this once you've added follow-through (`market-agent-followups.md`). Prices a
 4. **No newer news:** a check that finds no newer headlines says "No newer news", and shows no cost.
 5. **After a final report:** the run log shows "Follow-through: …". Within a week of a surprise, its automatic check appears, labelled "automatically: a surprise".
 6. **Ask:** "What happened after [a ticker]'s last flagged move?" cites (follow-through).
+
+### 7.5 Company filings
+
+Do this once you've added filings (`market-agent-filings.md`), with `SEC_CONTACT` set. Looking for filings is free; each read costs a few cents.
+
+1. **The SEC:** `python filings.py figures AAPL` prints Apple's last 8 quarters. Compare two with Apple's reports. One quarter a year says it was worked out from the annual report.
+2. **A check:** `python filings.py check --no-read` lists your companies' filings, with nothing sent to Claude. Compare one company's list with its page on sec.gov.
+3. **A first take:** `python filings.py read ACCESSION` on a recent results announcement. Open the press release and check three quotes word for word, and each figure against the income statement.
+4. **Confirmation:** if that quarter's report is filed, `python filings.py check` then `python filings.py show ACCESSION` marks each figure confirmed.
+5. **In the app:** the Filings tab shows the same first take. **Check now** and **Read this filing** show progress, and pressing again straight away explains the wait.
+6. **The calendar:** the company's last earnings date says "Reported", linking to the filing.
+7. **A run:** on a day a tracked company files, the run log starts with the filings lines, and a flagged company's "Likely why" cites its filing.
+8. **Edge cases:** work through the list in the filings guide (section 12.5): an ETF, a bank, a company whose year doesn't end in December, no `SEC_CONTACT`, and no network.
 
 ---
 
@@ -548,12 +568,12 @@ def test_earnings_date_found_and_missing():
 
 ```python
     assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events", "past_moves",
-                     "get_earnings_date"}
+                     "recent_filings", "get_earnings_date"}
 ```
 
 **6. Let the agent use it.** Add `"mcp__market__get_earnings_date"` to `allowed_tools` in `run_brief.py`, and mention `` `get_earnings_date` `` in `analyst_prompt.md` (when to call it). `test_agent_can_use_every_market_tool` fails until you've done both, which stops a tool being added that the agent can't use.
 
-**7. Run `pytest -v`.** Expect one more test than before (`277 passed, 3 skipped` with everything up to the follow-through guide). Then check the new tool in the Inspector with live data (section 5).
+**7. Run `pytest -v`.** Expect one more test than before (`416 passed, 4 skipped` with everything up to the filings guide). Then check the new tool in the Inspector with live data (section 5).
 
 **General rules for tool tests:**
 
@@ -581,6 +601,9 @@ def test_earnings_date_found_and_missing():
 | Calendar tests fail with `no such table: events` | An old `events.py`. Replace it from the calendar guide's appendix. |
 | `test_live_calendar_data` fails | Yahoo's calendar or company profile didn't load. Retry later, or run `pip install -U yfinance`. |
 | `ModuleNotFoundError: No module named 'watchlist'` | `test_watchlist.py` is there but `watchlist.py` isn't. Do the stocks guide, or remove `test_watchlist.py` until you do. |
+| `ModuleNotFoundError: No module named 'filings'` (or `edgar`) | `test_filings.py` or the new `conftest.py` is there but `filings.py` and `edgar.py` aren't. Do the filings guide, or remove `test_filings.py` until you do. |
+| `test_live_filings` is skipped with `LIVE_TESTS` set | `SEC_CONTACT` isn't set in that terminal. Set it to your name and email (filings guide, step 5). |
+| `test_live_filings` fails with "The SEC refused the request" | `SEC_CONTACT` isn't a real name and email, or the SEC is limiting your address. Wait 10 minutes. |
 | `ModuleNotFoundError: No module named 'followups'` (or `stories`) | `test_followups.py` or the new `conftest.py` is there but `followups.py` and `stories.py` aren't. Do the follow-through guide, or remove `test_followups.py` until you do. |
 | `test_live_search` fails with "Searching needs a newer yfinance" | Run `pip install -U yfinance`. |
 | `test_live_search` fails without finding `COST` | Yahoo's search didn't answer (rate limiting or a network problem). Wait a few minutes and retry. |
@@ -1183,7 +1206,8 @@ def test_tools_work_through_mcp(fake_market):
 
     names, result = asyncio.run(run())
 
-    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events", "past_moves"}
+    assert names == {"flag_events", "compute_moves", "get_news", "market_backdrop", "upcoming_events", "past_moves",
+                     "recent_filings"}
     assert not result.is_error
     payload = json.loads(result.content[0].text)  # the JSON text the agent receives
     assert payload["session"]["status"] == "complete"

@@ -4,12 +4,12 @@ A separate test environment with **two months of sample reports**, so you can se
 
 It runs your **real program's code** against its **own sample database**. Claude, market data, Voyage AI (for search), Discord (for alerts) and the events calendar's sources are simulated by default, so it costs nothing, needs no internet and never posts to your channel. It lives in its own folder next to `market-agent/` and **never writes anything into your program's folder**. An automated test checks this every time.
 
-This builds on `market-agent-followups.md`. Your program should include everything up to that guide: the Previous days tab, charts, search, sector and market context, Discord alerts, the events calendar connected to briefs, alerts and Ask, finding and tracking stocks, and follow-through and story updates.
+This builds on `market-agent-filings.md`. Your program should include everything up to that guide: the Previous days tab, charts, search, sector and market context, Discord alerts, the events calendar connected to briefs, alerts and Ask, finding and tracking stocks, follow-through and story updates, and company filings.
 
 **Already set this up for an earlier version?**
 
 1. Replace `sample_market.py`, `testenv.py` and `test_testenv.py` with the appendix versions.
-2. Run `python testenv.py seed --reset`. This creates the test environment's **own watchlist**, `data/watchlist.txt`, so the Stocks tab never edits your real one, saves prices for quiet stocks, and works out two months of follow-through and story updates.
+2. Run `python testenv.py seed --reset`. This creates the test environment's **own watchlist**, `data/watchlist.txt`, so the Stocks tab never edits your real one, saves prices for quiet stocks, works out two months of follow-through and story updates, and fills in two months of company filings and first takes.
 3. Run `python testenv.py build-frontend`.
 
 ---
@@ -64,6 +64,7 @@ projects/
                                         ├── Discord ────────▶ simulated (written to data/alerts_outbox.jsonl)
                                         ├── events calendar ▶ simulated company calendars and news, read by a stand-in for Claude
                                         ├── story updates ──▶ simulated later headlines, read by a stand-in for Claude
+                                        ├── the SEC ────────▶ simulated filings, documents and figures (at sec.example.com), read by a stand-in for Claude
                                         ├── watchlist ──────▶ data/watchlist.txt (a copy; your real one is only read)
                                         └── stock search ───▶ simulated (a built-in list of US stocks and ETFs)
 ```
@@ -82,6 +83,7 @@ projects/
 | Events calendar | Two months of calendar history and the weeks ahead (earnings, ex-dividend dates and news events), the daily update (`python testenv.py events`) and **Update now**, all checked and saved by your real `events.py` |
 | Finding and tracking stocks | Search a built-in list of US stocks and ETFs offline; track, star and remove stocks in the test environment's own watchlist. A stock you add gets simulated prices and appears from the next run, as in real use |
 | Follow-through and story updates | Two months of follow-through worked out by your real `followups.py` over the simulated prices: 27 moves, 18 with all three figures, 12 surprises. Every surprise's story checked by your real `stories.py`, reading simulated later headlines with a free stand-in for Claude, or real Claude with `--live-stories`. **Refresh prices** and **Check for updates** work offline |
+| Company filings and first takes | A simulated SEC, in the SEC's own formats, read by your real `edgar.py` and `filings.py`: 24 filings for the 5 sample companies, each one's results read on its day by a free stand-in for Claude, and figures confirmed by the quarterly report. **Check now** and **Read this filing** work offline. A filing made "today" at 12:40 is found by the next run. Real SEC and Claude with `--live-filings` |
 | A year or more of history | `python testenv.py seed --reset --months 12` |
 
 ---
@@ -95,9 +97,10 @@ projects/
 | Changing your code | It only *reads* files in `market-agent/`. Python's cache folders (`__pycache__`) are switched off, so not even those get written. A test confirms every file in `market-agent/` is byte-for-byte unchanged. |
 | Changing your frontend build | The app is built into `market-agent-testenv/frontend-dist/`. Your `frontend/dist/` is never touched. (Vite may update its own cache inside `node_modules`, as it does on any build.) |
 | Clashing with the running app | The test app uses port **8100**. Your real API (8000) and dev server (5173) can run at the same time. |
-| Spending money | Claude, market data and Voyage are simulated unless you choose `--live-ask`, `--live-runs`, `--live-embeddings`, `--live-calendar` or `--live-stories`. (`--live-search` uses Yahoo's free search.) |
+| Spending money | Claude, market data and Voyage are simulated unless you choose `--live-ask`, `--live-runs`, `--live-embeddings`, `--live-calendar`, `--live-stories` or `--live-filings`. (`--live-search` uses Yahoo's free search.) |
+| Asking the SEC | The SEC is simulated, at `sec.example.com` addresses (a domain reserved for examples), so nothing is requested from sec.gov and `SEC_CONTACT` isn't needed. Only `serve --live-filings` asks the real SEC. |
 | Posting to your Discord | Alerts are written to `data/alerts_outbox.jsonl` instead, even if `DISCORD_WEBHOOK_URL` is set in your terminal. Only `serve --live-alerts` sends them. A test checks that no connection to Discord is made. |
-| Interfering with scheduled runs | Your cron or Task Scheduler entries aren't touched, and the test environment has no schedule of its own. |
+| Interfering with scheduled runs | Your cron or Task Scheduler entries aren't touched, and the test environment has no schedule of its own. If your API runs the final report by itself after the close (`AUTO_CLOSE_RUN`), that's switched off here, so it never starts a run on the sample's clock. |
 | Being set up in the wrong place | If the test folder is inside `market-agent/`, it refuses to run. |
 
 **Which code it tests:** always the current code in `market-agent/`. When you change your program, the test environment picks up the change on its next start (section 10).
@@ -106,7 +109,7 @@ projects/
 
 ## 3. Before you start
 
-- [ ] Your program includes everything up to `market-agent-followups.md`, and its tests pass (`pytest -v` in `market-agent/` shows `276 passed, 3 skipped`)
+- [ ] Your program includes everything up to `market-agent-filings.md`, and its tests pass (`pytest -v` in `market-agent/` shows `415 passed, 4 skipped`)
 - [ ] You've run `npm install` in `market-agent/frontend` (from the frontend guide)
 - [ ] You know where your `market-agent` folder is. The test environment goes **next to it**, in the same parent folder
 
@@ -179,11 +182,12 @@ This takes a second or two. It prints a summary like this (for a run on 6 Novemb
                         "2026-11-16 Apple: Court hearing in patent case", "2026-11-19 JPMorgan Chase: Investor day"]},
   "watchlist": {"file": ".../market-agent-testenv/data/watchlist.txt", "tracked": 5, "main": ["AAPL", "MSFT", "NVDA"],
                 "added_since_seeding": [], "removed_since_seeding": []},
-  "follow_through": {"moves": 27, "settled": 18, "surprises": 12, "story_updates": 12}
+  "follow_through": {"moves": 27, "settled": 18, "surprises": 12, "story_updates": 12},
+  "filings": {"listed": 24, "results": 10, "first_takes": 5, "figures_confirmed": 18, "figures_waiting": 5, "worth_a_look": 3}
 }
 ```
 
-Your numbers will differ, because the sample ends on the day you run it and uses your watchlist. `kinds_of_move` counts the verdicts on flagged moves in final reports. `sector_move_days` are the days the sample gave one of your sectors a big move of its own. `calendar` counts events from the "today" of the sample onwards (`upcoming`) and before it (`past`), and lists the next few. `watchlist` is the test environment's own list: its main stocks, and any stocks added or removed on the Stocks tab since you seeded. `follow_through` counts the moves followed up, those with all three figures (`settled`), the surprises, and the story updates.
+Your numbers will differ, because the sample ends on the day you run it and uses your watchlist. `kinds_of_move` counts the verdicts on flagged moves in final reports. `sector_move_days` are the days the sample gave one of your sectors a big move of its own. `calendar` counts events from the "today" of the sample onwards (`upcoming`) and before it (`past`), and lists the next few. `watchlist` is the test environment's own list: its main stocks, and any stocks added or removed on the Stocks tab since you seeded. `follow_through` counts the moves followed up, those with all three figures (`settled`), the surprises, and the story updates. `filings` counts the filings listed, the results announcements among them, those with a first take, the figures confirmed by a quarterly report and those still waiting for one, and the announcements marked "Worth a look".
 
 ### Step 5: Build the app into the test folder
 
@@ -219,7 +223,7 @@ In a second terminal (same folder, same Python environment):
 pytest -v
 ```
 
-Expect `33 passed`. The last test confirms your `market-agent/` folder is exactly as it was.
+Expect `40 passed`. The last test confirms your `market-agent/` folder is exactly as it was.
 
 ---
 
@@ -245,6 +249,9 @@ Expect `33 passed`. The last test confirms your `market-agent/` folder is exactl
 | **Coming up** | Every sample brief ends with "Coming up": the next 7 days of earnings and ex-dividend dates, and news events announced by then, in your program's own line format. Simulated runs call `upcoming_events` like the real agent; the daily summary alert, offline Ask and the Today tab's card read the sample calendar through your real code |
 | **Follow-through** | Worked out when you seed, by your real `followups.py`, from the simulated closes after each move flagged in a final report. The sample's "latest close" is its latest finished day, so today's live day is never used |
 | **Story updates** | Most news-driven and earnings moves get a follow-up headline 2 to 6 days later ("Nvidia responds to last week's concerns"), from the same fictional publishers. Every surprise was checked when you seeded, as the final report a week after it would have done. The stand-in for Claude finds the follow-up headline if there is one ("Developed"), or says nothing newer is about the move ("No update"). Checks cost $0 |
+| **Company filings** | For each company, around its earnings day: a results announcement with a press release, and the quarterly report (usually two days later). The same pair from the quarter before is listed too. News in the sample that a company would also file (an executive leaving, a new product, a large contract) has an announcement of its own. Figures are made up, consistent from quarter to quarter, and the same in the announcement and the report. Every document says it's simulated |
+| **Filing habits** | Some companies report the evening before their calendar date, and some file the quarterly report minutes before the announcement, so both cases can be seen. A bank has no gross profit or operating income. Funds aren't on the simulated SEC's company list. GOOG and GOOGL share one company number |
+| **First takes** | Made when you seed, as daily use would have: each results announcement read on its day by the stand-in for Claude, which picks out the headline, the figures table, a few sentences and the outlook line, each with a quote. Your real `filings.py` checks every quote and number, compares the figures, and confirms them when the report arrives. Reads cost $0. Discord messages from those days aren't replayed. Each sample first take ends with the point "Simulated sample data for the test environment. This is not a real filing." |
 | **Marked as sample** | Every brief says "Sample data for the test environment: prices and news are simulated." |
 | **Repeatable** | The same settings always give identical data. Use `--seed` with any number for a different set. |
 | **Simulated cost** | Each report has a plausible Claude cost, so cost totals have data. No money is spent. |
@@ -360,6 +367,20 @@ Work through these with `python testenv.py serve` running. Run `python testenv.p
 - [ ] `python testenv.py finalize` in another terminal: the day's move appears on Follow-through without a reload
 - [ ] Ask "Why was AMZN flagged?": the answer says how its last move played out a week later (follow-through), and its latest story update
 
+**Company filings**
+
+- [ ] The Filings tab lists 24 filings. Amazon's results (4 November) lead, with a first take: figures, margins, key points, guidance and what changed
+- [ ] Amazon's figures say "Not checked yet" (its report isn't filed). Microsoft's say "✓ Confirmed". JPMorgan's first take has 3 figures, not 5
+- [ ] **From the filing** under a point shows the exact words. Hovering a figure's name shows its table row
+- [ ] The filters: **Results** leaves 10, **Announcements** 5 (3 marked "Worth a look"), **Only with a first take** 5
+- [ ] **Read this filing** on an announcement or a quarterly report gives a first take at $0. Reading another straight away explains the wait
+- [ ] **Run update now** (or `python testenv.py update`): the log starts "Filings: 1 new: MSFT (information shared with investors)", the brief's "Likely why" links to the company filing, and the filing tops the Filings tab without a reload
+- [ ] `python testenv.py finalize`: Amazon's quarterly report arrives (4:10pm in the sample), and its results' figures turn to "✓ Confirmed" without a reload
+- [ ] On the Calendar tab, 17 September (JPMorgan's earnings date) says "Reported on Sep 16", and **First take** opens that filing, outlined, on the Filings tab
+- [ ] Track GOOGL and GOOG on the Stocks tab, then **Check now**: the same filings appear under both. Track SPY: the tab says there are no company filings for it
+- [ ] Ask "Why was AMZN flagged?": the answer ends its AMZN lines with "Latest first take, on its results announcement: …"
+- [ ] Links to filings go to `sec.example.com`, which doesn't exist: the sample's filings aren't real
+
 **Scale**
 
 - [ ] `python testenv.py seed --reset --months 12` creates a year (about 250 trading days). Check that both tabs stay fast and **Load older days** pages through it all
@@ -383,6 +404,7 @@ Run every command from `market-agent-testenv/` with the Python environment activ
 | `python testenv.py finalize` | Saves the latest day's final report (like the after-close or morning run) |
 | `python testenv.py alerts` | Prints the simulated Discord alerts (add `--clear` to empty the outbox) |
 | `python testenv.py events` | Simulates the daily events-calendar update at the market open |
+| `python testenv.py filings` | Simulates a check for new company filings (as each run does first) |
 | `python testenv.py reset` | Deletes the sample data, its search index and the alerts outbox (only files in `market-agent-testenv/data/`). The test watchlist is kept |
 
 **`seed` options**
@@ -408,6 +430,7 @@ Run every command from `market-agent-testenv/` with the Python environment activ
 | `--live-calendar` | The calendar's Update now uses real Yahoo Finance and Claude (section 8) |
 | `--live-search` | The Stocks tab searches and checks stocks with Yahoo Finance (free; section 8) |
 | `--live-stories` | Story updates' checks read real Yahoo news with real Claude (section 8) |
+| `--live-filings` | The Filings tab asks the real SEC and reads with real Claude (section 8) |
 
 **Settings:** set these before `serve` if you need them.
 
@@ -416,6 +439,7 @@ Run every command from `market-agent-testenv/` with the Python environment activ
 | `RUN_COOLDOWN_SECONDS` | `15` | Wait between Run now presses (your real app uses 300) |
 | `CALENDAR_SCAN_COOLDOWN_SECONDS` | `15` | Wait between the calendar's Update now presses (your real app uses 300) |
 | `FOLLOWUP_REFRESH_COOLDOWN_SECONDS`, `STORY_CHECK_COOLDOWN_SECONDS` | `15` | Wait between **Refresh prices** presses, and between story checks (your real app uses 60 and 30) |
+| `FILINGS_CHECK_COOLDOWN_SECONDS`, `FILING_READ_COOLDOWN_SECONDS` | `15` | Wait between **Check now** presses, and between reads (your real app uses 60 and 30) |
 | `REPORT_POLL_SECONDS` | `2` | How often the app checks for saves by other programs |
 | `MARKET_AGENT_DIR` | `../market-agent` | Where your program is |
 
@@ -473,6 +497,14 @@ python testenv.py serve --live-stories     # needs ANTHROPIC_API_KEY and interne
 
 **Check for updates** then reads Yahoo's real newest headlines for the stock and asks real Claude, saving into the **test** database. Each check costs a few cents (never more than $0.10). The sample's moves and explanations are fictional, so most real checks say "No update": this is for seeing how real headlines, verdicts and costs look. Automatic checks after `finalize` stay simulated.
 
+**Real filings:**
+
+```bash
+python testenv.py serve --live-filings     # needs SEC_CONTACT, ANTHROPIC_API_KEY and internet
+```
+
+The Filings tab then asks the real SEC about the stocks on the test watchlist, and **Read this filing** uses real Claude (a few cents each), saving into the **test** database. Real filings are listed by their real dates, so they sit alongside the sample's. Because the sample's "today" is the day you seeded, real results from the last 3 days before that are read automatically by the first check. This is the cheapest way to see real first takes without touching your program's database.
+
 **Real agent runs:**
 
 ```bash
@@ -492,7 +524,7 @@ Seed with yesterday as the end date first. If the sample already has a report fo
 pytest -v
 ```
 
-Expect `33 passed`. They use temporary databases and watchlists, so they don't change your sample data.
+Expect `40 passed`. They use temporary databases and watchlists, so they don't change your sample data.
 
 | Test | Proves that |
 |---|---|
@@ -527,6 +559,13 @@ Expect `33 passed`. They use temporary databases and watchlists, so they don't c
 | `test_offline_refresh_and_story_check` | **Refresh prices** and **Check for updates** work offline through your real API, at $0 |
 | `test_offline_run_now_checks_past_moves_and_finalize_follows_up` | Run now calls `past_moves` and the brief mentions past moves; `finalize` follows up the new day's moves |
 | `test_offline_ask_knows_how_moves_played_out` | Offline Ask gives a stock's last move's follow-through and its latest story update, and the overall patterns for general questions |
+| `test_filings_over_two_months` | 24 filings; each company's results read on its day, last quarter's only listed; figures confirmed where the report is in and waiting where it isn't; a bank's 3 figures; a report filed minutes before its announcement; results filed the evening before their calendar date still matched; links at `sec.example.com`; no Discord messages replayed |
+| `test_the_sample_sec_speaks_the_secs_formats` | The simulated SEC is read by your real `edgar.py`: fourth quarters are worked out, the press release's table matches the report's figures, the discussion section is found, and funds aren't listed |
+| `test_offline_check_and_read_a_filing` | **Check now** and **Read this filing** work offline through your real API, on an announcement and on a quarterly report, at $0 |
+| `test_offline_run_now_finds_a_filing_made_today` | Run now finds the filing made at 12:40, calls `recent_filings`, and the brief links to the company filing. A routine filing sends no Discord message |
+| `test_finalize_brings_the_report_that_confirms_the_announcement` | After `finalize`, Amazon's quarterly report is listed and its results' five figures are confirmed |
+| `test_stocks_added_on_the_stocks_tab_get_filings` | GOOGL and GOOG show the same filings; SPY is reported as having none; the check is still `ok` |
+| `test_offline_ask_knows_the_latest_first_take` | Offline Ask ends a stock's lines with its latest first take, cited as (filing, date) |
 | `test_refuses_to_use_the_main_projects_database` | Pointing it at a database inside `market-agent/` is refused |
 | `test_main_project_was_not_touched` | **Every file in `market-agent/` is unchanged** after all of the above. No `__pycache__` folders were created, and no search index or alerts outbox was written there |
 
@@ -565,6 +604,7 @@ Expect `33 passed`. They use temporary databases and watchlists, so they don't c
   The earlier Today, Previous days, chart, search and alerts checks also still pass.
 - **Tracked stocks work in it.** In a browser over the sample, 13 checks passed with no browser errors: the Today tab's main stocks and "N more" note, the Stocks tab's groups and counts, offline search (Costco yes, Bitcoin no), Track as main with its earnings date, "Also flagged" after unstarring, the new stock's figures after Run update now, its chart and calendar link, Remove with Keep, a hand edit showing up live, phone width and dark mode. Your real `watchlist.txt` was unchanged afterwards, and every earlier browser check still passes.
 - **Follow-through and story updates work in it.** In a browser over the sample, 13 checks passed with no browser errors: the patterns and horizons, bar tooltips, the table's filters, a ticker's chart, Refresh prices and its cooldown, Check news through to an update, automatic checks labelled, the row linking to its update, past moves in a run's brief, Ask's follow-through lines, a `finalize` from another terminal appearing live, phone width and dark mode. Every earlier browser check still passes.
+- **Company filings work in it.** In a browser over the sample, 13 checks passed with no browser errors: the list and a first take, quotes and source rows, confirmed figures and a bank's shorter table, the filters, Read this filing and its cooldown, Check now and its cooldown, a run finding a filing made minutes earlier, a later report confirming figures without a reload, the calendar's "Reported" link opening the filing, a ticker's chart and Ask's first-take line, phone width, dark mode, and the Coming up card's link for a reported event. Every earlier browser check still passes.
 - **Charts work in it.** The chart was driven in a browser over the sample data, covering markers, ranges, hover, keyboard, opening reports from markers, phone width and dark mode. Afterwards, the main project was again unchanged by the test environment.
 
 ---
@@ -582,6 +622,7 @@ Expect `33 passed`. They use temporary databases and watchlists, so they don't c
 | Change your real watchlist and want it here too | Delete `data/watchlist.txt`, then `python testenv.py seed --reset`. It copies your real list again |
 | Add stocks on the test Stocks tab and want them to have history | `python testenv.py seed --reset`. The test watchlist is kept |
 | Want "today" to match the real date | `python testenv.py seed --reset` |
+| Change how filings are read or checked (`edgar.py`, `filings.py`) | `python testenv.py seed --reset`, so the sample's filings and first takes are made again |
 | Change how moves are judged (`followups.py`) or checked (`stories.py`) | `python testenv.py seed --reset`, so the follow-through and story updates are worked out again |
 | Have a live demo on GitHub Pages (`market-agent-demo.md`) | It makes its own copy of this sample. After changing your program, run `python demo.py build` then `python demo.py publish` in `market-agent-demo/` |
 | Add a feature that needs new sample data | Extend `sample_market.py` (for example, more event types) and add a check to `test_testenv.py` |
@@ -609,6 +650,8 @@ Run `pytest -v` in **both** folders after changes: the main project's tests chec
 | Search says "By keywords" with `--live-embeddings` | `VOYAGE_API_KEY` isn't set in that terminal, or `voyageai` isn't installed. Without `--live-embeddings`, the stand-in is used and it says "By meaning and keywords". |
 | `no such column: move_read` from `status` | The sample data is from before sector context. Run `python testenv.py seed --reset`. |
 | No "simulated Discord" note after `update` | Nothing new to alert: those tickers were already alerted today, or nothing is flagged. See `python testenv.py alerts`, or `seed --reset` to start again. |
+| The Filings tab is empty | The sample data is from before filings. Run `python testenv.py seed --reset`. |
+| "the filing on sec.gov" opens a page that doesn't exist | By design: the sample's filings are simulated, at `sec.example.com`. Use `--live-filings` for real ones. |
 | The Follow-through tab is empty, or Story updates has none | The sample data is from before follow-through. Run `python testenv.py seed --reset`. |
 | The Calendar tab says "Not updated yet" | The sample data is from before the calendar. Run `python testenv.py seed --reset`. |
 | The Stocks tab doesn't match your real `watchlist.txt` | By design: the test environment has its own copy. To copy yours again, delete `data/watchlist.txt` and run `python testenv.py seed --reset`. |
@@ -640,6 +683,9 @@ the real agent produces. The same settings always give the same data.
 Prices are built from a market move, a move for each sector, and each company's own
 move, so the sample has stock-specific, sector-wide and market-wide days. Verdicts on
 those (and the market backdrop line) use the real program's rules from market_tools.py.
+
+SampleFilings (at the end) plays the SEC: each company's filings, documents and structured
+figures, in the SEC's own formats, for the Filings tab.
 
 Nothing here touches the internet, Claude, or the real program's database.
 """
@@ -1093,8 +1139,9 @@ class SampleMarket:
                  if (a := self.follow_up_article(t, d)) and a["published"][:10] <= as_of.isoformat()]
         return sorted(found, key=lambda a: a["published"], reverse=True)[:10]
 
-    def brief(self, scan: dict, day: date, past: dict | None = None) -> str:
-        """A brief in the same format as analyst_prompt.md asks the agent for."""
+    def brief(self, scan: dict, day: date, past: dict | None = None, filed: dict | None = None) -> str:
+        """A brief in the same format as analyst_prompt.md asks the agent for. `past` and `filed` are what
+        the agent's past_moves and recent_filings tools returned for the flagged tickers."""
         session = scan["session"]
         intraday = session["status"] == "in_progress"
         lines = [f"# {'Intraday update' if intraday else 'Watchlist brief'}: {session['as_of']}", ""]
@@ -1117,10 +1164,11 @@ class SampleMarket:
                 f"- **Vs. sector and market:** {m['context']['summary']}",
             ]
             news = self.news(m["ticker"], day)
-            if news:
-                lines.append(f"- **Likely why:** {news[0]['summary']} [{news[0]['publisher']}]({news[0]['url']})")
-            else:
-                lines.append("- **Likely why:** No clear catalyst found.")
+            why = f"{news[0]['summary']} [{news[0]['publisher']}]({news[0]['url']})" if news else "No clear catalyst found."
+            for f in ((filed or {}).get(m["ticker"]) or [])[:1]:  # the company's own filing, if it made one
+                take = f" {f['first_take']['headline']}" if f.get("first_take") else ""
+                why += f" The company also filed with the SEC: {f['title'].lower()} ([company filing]({f['url']})).{take}"
+            lines.append(f"- **Likely why:** {why}")
             history = (past or {}).get(m["ticker"]) or {}
             extra = f" Past moves: {history['summary']}." if history.get("worth_mentioning") and history.get("summary") else ""
             lines += [f"- **Worth watching:** whether the move holds into the next session.{extra}", ""]
@@ -1231,6 +1279,363 @@ class SampleMarket:
 
     def sources(self, scan: dict, day: date) -> list[dict]:
         return [{**item, "ticker": m["ticker"]} for m in scan["flagged"] for item in self.news(m["ticker"], day)]
+
+
+# ---------------------------------------------------------------------------
+# The SEC, simulated
+# ---------------------------------------------------------------------------
+
+SAME_COMPANY = [("GOOGL", "GOOG")]  # two share classes, one company: the SEC lists both under one number
+NOT_A_FILING = "Simulated sample data for the test environment. This is not a real filing."
+HIGHLIGHTS = {1: ["Demand was strong across the company's main product lines.",
+                  "Customers renewed and expanded their contracts at a higher rate than last year.",
+                  "The company's newest products made up a larger share of sales."],
+              -1: ["Customers delayed some orders late in the quarter.",
+                   "Higher costs weighed on profit margins.",
+                   "Sales in the company's largest market were weaker than expected."]}
+OUTLOOKS = {1: "raised", 0: "reaffirmed", -1: "lowered"}
+DISCUSSION = [
+    "Revenue {moved} {pct}% compared with the same quarter last year, driven mainly by {driver}.",
+    "Cost of revenue {moved} as volumes changed, and gross profit was {gross_pct}% of revenue.",
+    "Research and development expenses increased as we continued to hire engineers and invest in new products.",
+    "Sales and marketing expenses were broadly in line with the same quarter last year.",
+    "Cash provided by operations was more than enough to fund capital spending during the quarter.",
+    "We returned cash to shareholders through share repurchases and dividends during the quarter.",
+    "We continue to expect our effective tax rate for the year to be similar to last year's.",
+    "Changes in currency exchange rates did not have a significant effect on revenue in the quarter.",
+]
+FILED_NEWS = {  # news in the sample that a company would also file with the SEC: (items, heading, sentences)
+    "A senior executive departure was announced.": (
+        "5.02,9.01", "Item 5.02 Departure of Directors or Certain Officers; Appointment of Certain Officers.",
+        ["{name} announced that its chief operating officer will step down at the end of the year.",
+         "The company has begun a search for a successor, and the role's duties will be shared among other executives in the meantime.",
+         "The departure is not the result of any disagreement with the company on its operations, policies or practices."]),
+    "A new product announcement drew buyers.": (
+        "7.01,9.01", "Item 7.01 Regulation FD Disclosure.",
+        ["{name} announced a new product line, which it expects to begin shipping next quarter.",
+         "The company said early orders from existing customers were ahead of its plans.",
+         "The information in this report is being furnished and is not deemed filed."]),
+    "Reports of a large contract win.": (
+        "1.01,9.01", "Item 1.01 Entry into a Material Definitive Agreement.",
+        ["{name} entered into a multi-year supply agreement with a large customer.",
+         "The agreement runs for five years and can be extended by either party.",
+         "The company expects the agreement to begin contributing to revenue next year."]),
+}
+MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+               "November", "December"]
+QUARTER_WORDS = ["first", "second", "third", "fourth"]
+
+
+def _long_date(d: date) -> str:
+    return f"{MONTH_NAMES[d.month - 1]} {d.day}, {d.year}"
+
+
+def _quarter_index(d: date) -> int:
+    return d.year * 4 + (d.month - 1) // 3
+
+
+def _quarter_dates(index: int) -> tuple[date, date]:
+    year, q = divmod(index, 4)
+    month = 3 * (q + 1)
+    return date(year, month - 2, 1), date(year, month, 31 if month in (3, 12) else 30)
+
+
+def _weekday_on_or_after(d: date) -> date:
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+class SampleFilings:
+    """What the SEC's EDGAR service would hold for the sample's companies: each one's list of filings,
+    the documents in them, and its structured figures, in EDGAR's own formats. The program's real
+    edgar.py reads them exactly as it reads the real thing.
+
+    Every company has, around its earnings day in the sample: a results announcement (8-K with a
+    press release), the quarterly report a day or two later (10-Q), and the same pair from the quarter
+    before. News in the sample that a company would also file (an executive leaving, a new product,
+    a large contract) has an 8-K too. All of it is fictional, and every document says so."""
+
+    def __init__(self, market: SampleMarket, www: str = "https://sec.example.com", data: str = "https://data.sec.example.com"):
+        self.market, self.www, self.data = market, www, data
+
+    # -- companies ----------------------------------------------------------------
+
+    def _key(self, ticker: str) -> str:
+        """The ticker whose simulated history stands for the company (the first tracked share class)."""
+        for group in SAME_COMPANY:
+            if ticker in group:
+                return next((t for t in group if t in self.market.returns), ticker)
+        return ticker
+
+    def cik(self, ticker: str) -> int:
+        group = next((g for g in SAME_COMPANY if ticker in g), (ticker,))
+        return 1_000_000 + zlib.crc32(f"cik{group[0]}".encode()) % 8_000_000
+
+    def companies(self) -> dict:
+        """The SEC's list of companies with tickers. Funds aren't on it, as in real life."""
+        tickers = list(dict.fromkeys([*self.market.tickers, *self.market.added,
+                                      *[s for s, (_, kind, _) in _UNIVERSE.items() if kind == "EQUITY" and "." not in s]]))
+        tickers = [t for t in tickers if _UNIVERSE.get(t, ("", "EQUITY", ""))[1] == "EQUITY"]
+        return {str(i): {"cik_str": self.cik(t), "ticker": t, "title": self.market.company(t).upper().rstrip(".")}
+                for i, t in enumerate(tickers)}
+
+    def _tickers_of(self, cik: int) -> list[str]:
+        known = [*self.market.tickers, *self.market.added]
+        return [t for t in known if self.cik(t) == cik and _UNIVERSE.get(t, ("", "EQUITY", ""))[1] == "EQUITY"]
+
+    # -- each company's results ---------------------------------------------------
+
+    def _earnings(self, ticker: str) -> tuple[date, int]:
+        return next((d, direction) for (t, d), (kind, direction) in self.market.events.items()
+                    if t == self._key(ticker) and kind == "earnings")
+
+    def _latest_quarter(self, ticker: str) -> int:
+        """The quarter reported on the sample's earnings day: the last one to end at least 10 days before it."""
+        return _quarter_index(self._earnings(ticker)[0] - timedelta(days=10)) - 1
+
+    def quarter(self, ticker: str, k: int) -> dict:
+        """The company's figures (in $ millions) for the quarter k quarters before its latest one."""
+        key = self._key(ticker)
+        n = zlib.crc32(f"fundamentals{key}".encode())
+        bank = sector_of(key) == "XLF"
+        direction = self._earnings(ticker)[1]
+        base, growth = 4_000 + n % 56_000, 0.012 + (n >> 8) % 30 / 1000
+        gross_margin = 0.42 + (n >> 13) % 28 / 100
+        operating_margin = gross_margin - 0.18 - (n >> 18) % 8 / 100
+        shares = max(200, round(base * 0.8 / (1.5 + (n >> 22) % 6)))
+        revenue = base / (1 + growth) ** max(k, 1) * (1 + ((n >> (k % 16)) % 7 - 3) / 400)
+        if k == 0:  # the latest quarter is where the surprise was
+            revenue *= 1 + growth + 0.03 * direction
+            operating_margin += 0.012 * direction
+        revenue = round(revenue)
+        operating = round(revenue * operating_margin)
+        net = round(revenue * 0.27) if bank else round(operating * 0.81)
+        start, end = _quarter_dates(self._latest_quarter(ticker) - k)
+        return {"start": start, "end": end, "revenue": revenue, "gross": round(revenue * gross_margin),
+                "operating": operating, "net": net, "eps": round(net / shares, 2), "bank": bank}
+
+    # -- filings ------------------------------------------------------------------
+
+    def filings(self, ticker: str) -> list[dict]:
+        """Every simulated filing for a company, whenever it was (or will be) filed."""
+        key, cik = self._key(ticker), self.cik(ticker)
+        n = zlib.crc32(f"filings{key}".encode())
+        earnings_day, _ = self._earnings(ticker)
+        found = []
+
+        def add(form, when, items="", report_date="", docs=()):
+            number = f"{cik:010d}-{when:%y}-{when.timetuple().tm_yday * 10 + len([f for f in found if f['accepted'].date() == when.date()]):06d}"
+            found.append({"accession": number, "form": form, "items": items, "accepted": when,
+                          "report_date": report_date, "docs": list(docs)})
+
+        for k, day in ((1, _weekday_on_or_after(earnings_day - timedelta(days=91))), (0, earnings_day)):
+            period = self.quarter(ticker, k)["end"].isoformat()
+            results_at = datetime.combine(day, time(7, 5), ET)
+            if k == 0 and n % 5 == 4:  # some companies report after the close the evening before
+                results_at = datetime.combine(_weekday_on_or_after(day - timedelta(days=3 if day.weekday() == 0 else 1)),
+                                              time(16, 5), ET)
+            if n % 4 == 0:             # some file the quarterly report minutes before the announcement
+                report_at = results_at - timedelta(minutes=4)
+            else:
+                report_at = datetime.combine(_weekday_on_or_after(day + timedelta(days=2)), time(16, 10), ET)
+            lower = key.lower().replace("-", "")
+            add("10-Q", report_at, "", period, [(f"{lower}-10q.htm", "10-Q", ("report", k))])
+            add("8-K", results_at, "2.02,9.01", results_at.date().isoformat(),
+                [(f"{lower}-8k.htm", "8-K", ("cover", k)), (f"{lower}-ex991.htm", "EX-99.1", ("press", k))])
+        for (t, day), (kind, _) in sorted(self.market.events.items(), key=lambda e: e[0][1]):
+            if t != key or kind != "news" or day < self.market.days[0] or day == self.market.days[-1]:
+                continue
+            filed = FILED_NEWS.get(self.market.catalyst(t, day))
+            if filed:
+                add("8-K", datetime.combine(day, time(8, 0), ET), filed[0], day.isoformat(),
+                    [(f"{key.lower()}-8k.htm", "8-K", ("news", day))])
+        last = self.market.days[-1]
+        if self.market.events.get((key, last), ("",))[0] == "news":  # today's story: filed around midday
+            text = self.market.catalyst(key, last)
+            items = FILED_NEWS[text][0] if text in FILED_NEWS else "7.01,9.01"
+            add("8-K", datetime.combine(last, time(12, 40), ET), items, last.isoformat(),
+                [(f"{key.lower()}-8k.htm", "8-K", ("news", last))])
+        return sorted(found, key=lambda f: f["accepted"], reverse=True)
+
+    def _find(self, cik: int, accession: str) -> tuple[str, dict]:
+        for ticker in self._tickers_of(cik):
+            for f in self.filings(ticker):
+                if f["accession"] == accession:
+                    return ticker, f
+        raise KeyError(accession)
+
+    def _folder(self, cik: int, accession: str) -> str:
+        return f"/Archives/edgar/data/{cik}/{accession.replace('-', '')}/"
+
+    # -- documents ----------------------------------------------------------------
+
+    def _page(self, *paragraphs: str, table: str = "") -> str:
+        body = "".join(f"<p>{p}</p>" for p in paragraphs)
+        return f"<html><head><title>Sample filing</title></head><body>{body}{table}<p>{NOT_A_FILING}</p></body></html>"
+
+    def press_release(self, ticker: str, k: int) -> str:
+        name, now, then = events_name(self.market.company(self._key(ticker))), self.quarter(ticker, k), self.quarter(ticker, k + 4)
+        direction = self._earnings(ticker)[1] if k == 0 else 0
+        pct = abs(round((now["revenue"] / then["revenue"] - 1) * 100))
+        word = QUARTER_WORDS[(now["end"].month - 1) // 3]
+        n = zlib.crc32(f"press{ticker}{k}".encode())
+        highlight = HIGHLIGHTS[direction or 1][n % 3]
+        profit = (f"Net income was ${now['net'] / 1000:.1f} billion" if now["bank"]
+                  else f"Operating income was ${now['operating'] / 1000:.1f} billion")
+        rows = [("Total revenue", "revenue", True)]
+        if not now["bank"]:
+            rows += [("Gross profit", "gross", False), ("Operating income", "operating", False)]
+        rows.append(("Net income", "net", True))
+        cells = "".join(
+            f"<tr><td>{label}</td>" + "".join(
+                (f"<td>$</td><td>{q[field]:,}</td>" if dollar else f"<td></td><td>{q[field]:,}</td>") for q in (now, then))
+            + "</tr>" for label, field, dollar in rows)
+        cells += (f"<tr><td>Diluted earnings per share</td><td>$</td><td>{now['eps']:.2f}</td>"
+                  f"<td>$</td><td>{then['eps']:.2f}</td></tr>")
+        table = ("<table><tr><td>(In millions, except per share amounts)</td><td></td>"
+                 f"<td>Three months ended {_long_date(now['end'])}</td><td></td><td>Three months ended {_long_date(then['end'])}</td></tr>"
+                 f"{cells}</table>")
+        return self._page(
+            f"{name} Reports {word.title()} Quarter Results",
+            f"{name} today announced results for the quarter ended {_long_date(now['end'])}.",
+            f"Revenue was ${now['revenue'] / 1000:.1f} billion, {'up' if now['revenue'] >= then['revenue'] else 'down'} {pct}% "
+            "from the same quarter a year earlier.",
+            f"{profit}, and diluted earnings per share were ${now['eps']:.2f}.",
+            highlight,
+            f"Outlook: The company {OUTLOOKS[direction]} its revenue outlook for the full year.",
+            table=table)
+
+    def cover(self, ticker: str, k: int) -> str:
+        name = events_name(self.market.company(self._key(ticker)))
+        return self._page("FORM 8-K", "Item 2.02 Results of Operations and Financial Condition.",
+                          f"{name} issued a press release announcing its results for the quarter ended "
+                          f"{_long_date(self.quarter(ticker, k)['end'])}. A copy is attached as Exhibit 99.1.")
+
+    def report(self, ticker: str, k: int) -> str:
+        now, then = self.quarter(ticker, k), self.quarter(ticker, k + 4)
+        grew = now["revenue"] >= then["revenue"]
+        facts = {"moved": "increased" if grew else "decreased", "pct": abs(round((now["revenue"] / then["revenue"] - 1) * 100)),
+                 "driver": "higher sales of our main products" if grew else "lower sales in our largest market",
+                 "gross_pct": round(now["gross"] / now["revenue"] * 100)}
+        discussion = [line.format(**facts) for line in DISCUSSION if not (now["bank"] and "gross profit" in line)]
+        return self._page(
+            f"FORM 10-Q for the quarterly period ended {_long_date(now['end'])}",
+            "Item 1. Financial Statements", f"Total revenue for the quarter was ${now['revenue']:,} million.",
+            "Item 2. Management's Discussion and Analysis of Financial Condition and Results of Operations",
+            *discussion, *[f"{line} This is unchanged from our previous report." for line in DISCUSSION[4:]],
+            *["Our results depend on demand for our products, competition, and economic conditions in the markets we serve."] * 8,
+            "Item 3. Quantitative and Qualitative Disclosures About Market Risk",
+            "There were no material changes to our market risk during the quarter.")
+
+    def news_filing(self, ticker: str, day: date) -> str:
+        name = events_name(self.market.company(self._key(ticker)))
+        text = self.market.catalyst(self._key(ticker), day)
+        _, heading, sentences = FILED_NEWS.get(text) or (
+            "", "Item 7.01 Regulation FD Disclosure.",
+            ["{name} posted an updated presentation for investors on its website.",
+             "The presentation repeats information the company has already made public.",
+             "The information in this report is being furnished and is not deemed filed."])
+        return self._page("FORM 8-K", heading, f"On {_long_date(day)}, " + sentences[0].format(name=name),
+                          *[s.format(name=name) for s in sentences[1:]])
+
+    def _document(self, ticker: str, spec: tuple) -> str:
+        kind, what = spec
+        return {"press": self.press_release, "cover": self.cover, "report": self.report, "news": self.news_filing}[kind](ticker, what)
+
+    # -- what the SEC answers -----------------------------------------------------
+
+    def submissions(self, cik: int, now: datetime) -> dict:
+        tickers = self._tickers_of(cik)
+        if not tickers:
+            raise KeyError(cik)
+        rows = [f for f in self.filings(tickers[0]) if f["accepted"] <= now]
+        utc = ZoneInfo("UTC")
+        return {"cik": str(cik), "name": self.market.company(tickers[0]).upper(), "tickers": tickers, "filings": {"files": [], "recent": {
+            "accessionNumber": [f["accession"] for f in rows],
+            "filingDate": [f["accepted"].date().isoformat() for f in rows],
+            "reportDate": [f["report_date"] for f in rows],
+            "acceptanceDateTime": [f["accepted"].astimezone(utc).strftime("%Y-%m-%dT%H:%M:%S.000Z") for f in rows],
+            "form": [f["form"] for f in rows], "items": [f["items"] for f in rows],
+            "primaryDocument": [f["docs"][0][0] for f in rows], "primaryDocDescription": [f["form"] for f in rows]}}}
+
+    def index_page(self, cik: int, accession: str) -> str:
+        ticker, filing = self._find(cik, accession)
+        folder = self._folder(cik, accession)
+        rows = "".join(
+            f'<tr><td scope="row">{i}</td><td scope="row">{kind}</td><td scope="row">'
+            f'<a href="{"/ix?doc=" if i == 1 else ""}{folder}{name}">{name}</a></td><td scope="row">{kind}</td>'
+            f'<td scope="row">{len(self._document(ticker, spec))}</td></tr>'
+            for i, (name, kind, spec) in enumerate(filing["docs"], 1))
+        return ('<html><body><table class="tableFile" summary="Document Format Files"><tr><th scope="col">Seq</th>'
+                '<th scope="col">Description</th><th scope="col">Document</th><th scope="col">Type</th>'
+                f'<th scope="col">Size</th></tr>{rows}</table></body></html>')
+
+    def facts(self, cik: int, now: datetime) -> dict:
+        """The company's structured figures: each quarter once its report is filed. As in real filings,
+        a year's fourth quarter isn't given on its own: only the year and its first nine months."""
+        tickers = self._tickers_of(cik)
+        if not tickers:
+            raise KeyError(cik)
+        ticker = tickers[0]
+        latest = self._latest_quarter(ticker)
+        reported = next(f["accepted"] for f in self.filings(ticker) if f["form"] == "10-Q") <= now
+        quarters = {latest - k: self.quarter(ticker, k) for k in range(0 if reported else 1, 13)}
+        fields = {"revenue": "RevenuesNetOfInterestExpense" if quarters[latest - 1]["bank"] else "RevenueFromContractWithCustomerExcludingAssessedTax",
+                  "net": "NetIncomeLoss", "eps": "EarningsPerShareDiluted"}
+        if not quarters[latest - 1]["bank"]:
+            fields.update(gross="GrossProfit", operating="OperatingIncomeLoss")
+        tags = {tag: [] for tag in fields.values()}
+
+        def fact(tag, field, start, end, parts, form):
+            value = sum(q[field] for q in parts)
+            tags[tag].append({"start": start.isoformat(), "end": end.isoformat(), "accn": f"{cik:010d}-{end:%y}-000001",
+                              "val": round(value, 2) if field == "eps" else value * 1_000_000, "fy": end.year,
+                              "fp": "FY" if form == "10-K" else f"Q{(end.month - 1) // 3 + 1}", "form": form,
+                              "filed": (end + timedelta(days=40 if form == "10-K" else 28)).isoformat()})
+
+        for index in sorted(quarters):
+            q, year_start = quarters[index], index - index % 4
+            so_far = [quarters.get(i) for i in range(year_start, index + 1)]
+            for field, tag in fields.items():
+                if index % 4 != 3:
+                    fact(tag, field, q["start"], q["end"], [q], "10-Q")
+                if index % 4 >= 2 and all(so_far):  # nine months in the third quarter's report, the year in the annual report
+                    fact(tag, field, so_far[0]["start"], q["end"], so_far, "10-K" if index % 4 == 3 else "10-Q")
+        return {"cik": cik, "entityName": self.market.company(ticker), "facts": {"us-gaap": {
+            tag: {"label": tag, "units": {"USD/shares" if tag == "EarningsPerShareDiluted" else "USD": facts}}
+            for tag, facts in tags.items()}}}
+
+    def get(self, url: str, now: datetime):
+        """What the SEC would answer for an address at a given moment. Raises KeyError for anything it doesn't have."""
+        import re
+        if url == f"{self.www}/files/company_tickers.json":
+            return self.companies()
+        if match := re.fullmatch(re.escape(self.data) + r"/submissions/CIK(\d{10})\.json", url):
+            return self.submissions(int(match.group(1)), now)
+        if match := re.fullmatch(re.escape(self.data) + r"/api/xbrl/companyfacts/CIK(\d{10})\.json", url):
+            return self.facts(int(match.group(1)), now)
+        if match := re.fullmatch(re.escape(self.www) + r"/Archives/edgar/data/(\d+)/(\d{18})/(.+)", url):
+            cik, folder, name = int(match.group(1)), match.group(2), match.group(3)
+            accession = f"{folder[:10]}-{folder[10:12]}-{folder[12:]}"
+            ticker, filing = self._find(cik, accession)
+            if name == f"{accession}-index.htm":
+                return self.index_page(cik, accession)
+            if name == "index.json":
+                return {"directory": {"name": self._folder(cik, accession), "item": [
+                    {"name": doc, "type": "text.gif", "size": "1", "last-modified": ""} for doc, _, _ in filing["docs"]]}}
+            for doc, _, spec in filing["docs"]:
+                if doc == name:
+                    return self._document(ticker, spec)
+        raise KeyError(url)
+
+
+def events_name(name: str) -> str:
+    """'Microsoft Corporation' -> 'Microsoft': how the sample's filings name the company."""
+    for suffix in (", Inc.", " Inc.", " Corporation", " & Co.", " Incorporated", " Company"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name[4:] if name.startswith("The ") else name
 ```
 
 ### testenv.py
@@ -1271,6 +1676,11 @@ next run on, like real use; `seed --reset` gives it two months of history too.
 Follow-through (the price after each flagged move) uses the simulated prices, and Story updates
 read simulated later headlines with a stand-in for Claude. `serve --live-stories` checks stories
 with real Yahoo news and Claude instead.
+
+Company filings come from a simulated SEC (sample_market.SampleFilings): results announcements,
+quarterly reports and other announcements for each sample company, in the SEC's own formats, read
+by your real edgar.py and filings.py with a stand-in for Claude. `serve --live-filings` asks the
+real SEC and Claude instead.
 """
 
 import argparse
@@ -1299,7 +1709,7 @@ PORT = 8100
 ET = ZoneInfo("America/New_York")
 DEFAULT_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "JPM"]
 
-from sample_market import SampleMarket, search_quotes, ticker_info, trading_days  # noqa: E402  (after the bytecode setting)
+from sample_market import SampleFilings, SampleMarket, search_quotes, ticker_info, trading_days  # noqa: E402  (after the bytecode setting)
 
 
 # ---------------------------------------------------------------------------
@@ -1342,7 +1752,7 @@ def load_market(db_path: Path = DB_PATH) -> SampleMarket:
     path = config_path(db_path)
     if not path.is_file():
         sys.exit("No sample data yet. Run: python testenv.py seed")
-    config = json.loads(path.read_text())
+    config = json.loads(path.read_text(encoding="utf-8"))
     if not watchlist_path(db_path).is_file():  # sample data made before the test environment had its own
         make_test_watchlist(db_path, config["tickers"])
     market = SampleMarket(config["tickers"], date.fromisoformat(config["end"]), config["months"], config["seed"])
@@ -1475,7 +1885,7 @@ def update_search_index(db_path: Path = DB_PATH, live: bool = False) -> dict:
 def read_tickers(path: Path) -> list[str]:
     """The tickers in a watchlist.txt. A line can name a benchmark after the ticker, a * marks
     a main stock, and anything after # is a comment."""
-    words = [line.split("#", 1)[0].replace("*", " ").split() for line in path.read_text().splitlines()]
+    words = [line.split("#", 1)[0].replace("*", " ").split() for line in path.read_text(encoding="utf-8-sig").splitlines()]
     return [w[0].upper() for w in words if w]
 
 
@@ -1506,7 +1916,7 @@ def make_test_watchlist(db_path: Path = DB_PATH, tickers: list[str] | None = Non
     if tickers:
         lines = [t.strip().upper() for t in tickers if t.strip()]
     elif real.is_file() and read_tickers(real):
-        lines = real.read_text().splitlines()  # benchmarks and comments come along
+        lines = real.read_text(encoding="utf-8-sig").splitlines()  # benchmarks and comments come along
     else:
         lines = list(DEFAULT_TICKERS)
     if not any("*" in line.split("#", 1)[0] for line in lines):
@@ -1520,7 +1930,7 @@ def make_test_watchlist(db_path: Path = DB_PATH, tickers: list[str] | None = Non
     header = "# The test environment's watchlist (the Stocks tab edits this copy, never the real one)"
     if not lines or lines[0] != header:
         lines.insert(0, header)
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return read_tickers(path)
 
 
@@ -1613,7 +2023,7 @@ def seed_database(db_path: Path = DB_PATH, end: date | None = None, months: int 
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     config_path(db_path).write_text(json.dumps(
-        {"end": end.isoformat(), "months": months, "seed": seed, "tickers": market.tickers}, indent=2))
+        {"end": end.isoformat(), "months": months, "seed": seed, "tickers": market.tickers}, indent=2), encoding="utf-8")
 
     with closing(reports_db.connect(db_path)) as conn:
         for day in market.days:
@@ -1638,6 +2048,7 @@ def seed_database(db_path: Path = DB_PATH, end: date | None = None, months: int 
     for _ in range(10):  # each surprise checked, as the final report a week after it would have done
         if not follow_up(db_path, every_surprise=True)["checks"]:
             break
+    seed_filings(db_path, market)
     return status_summary(db_path)
 
 
@@ -1689,7 +2100,8 @@ def status_summary(db_path: Path = DB_PATH) -> dict:
                           "added_since_seeding": market.added,
                           "removed_since_seeding": [t for t in market.tickers if t not in market.watching]},
             "follow_through": {"moves": len(followed), "settled": sum(m["settled"] for m in followed),
-                               "surprises": sum(m["surprise"] for m in followed), "story_updates": story_count}}
+                               "surprises": sum(m["surprise"] for m in followed), "story_updates": story_count},
+            "filings": filings_summary(db_path)}
 
 
 # ---------------------------------------------------------------------------
@@ -1722,7 +2134,7 @@ def simulate_update(db_path: Path = DB_PATH) -> str:
         outcome = _save(reports_db, conn, market, day, market.scan(day, as_of, fraction), "intraday",
                         datetime.now(timezone.utc), 0.0)
     update_search_index(db_path)
-    return f"{outcome}: intraday report for {day} as of {as_of}" + simulated_alerts(day, db_path)
+    return f"{outcome}: intraday report for {day} as of {as_of}" + check_filings(db_path) + simulated_alerts(day, db_path)
 
 
 def simulate_finalize(db_path: Path = DB_PATH) -> str:
@@ -1737,7 +2149,7 @@ def simulate_finalize(db_path: Path = DB_PATH) -> str:
     f = followed["followups"] or {}
     note = (f" · follow-through: {f['added']} new, {f['updated']} updated, {len(followed['checks'])} story checks"
             if f else "")
-    return f"{outcome}: final report for {day}{note}{alerted}"
+    return f"{outcome}: final report for {day}{note}{check_filings(db_path)}{alerted}"
 
 
 def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) -> None:
@@ -1751,6 +2163,7 @@ def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) ->
         if point is None:
             return {"status": "complete", "as_of": market.days[-1].isoformat()}
         plan["day"], plan["as_of"], plan["fraction"] = point
+        market.run_as_of = plan["as_of"]  # the sample's clock, for the filings check that starts each run
         return {"status": "in_progress", "as_of": plan["as_of"]}
 
     async def fake_agent(*, prompt, options):
@@ -1769,7 +2182,7 @@ def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) ->
                                model="offline-test")
         await asyncio.sleep(0.2)
         yield UserMessage(content=[ToolResultBlock(tool_use_id="calendar", content=text({"this_week": scan["coming_up"]}))])
-        past = {}
+        past, filed = {}, {}
         if scan["flagged"]:
             import market_tools  # the real tool, reading the sample database
             ask_for = {"tickers": [m["ticker"] for m in scan["flagged"]], "kinds": [m["context"].get("read") for m in scan["flagged"]]}
@@ -1779,6 +2192,13 @@ def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) ->
             past = past_result.get("moves", {})
             await asyncio.sleep(0.2)
             yield UserMessage(content=[ToolResultBlock(tool_use_id="past", content=text(past_result))])
+            ask_for = {"tickers": ask_for["tickers"]}
+            yield AssistantMessage(content=[ToolUseBlock(id="filed", name="mcp__market__recent_filings", input=ask_for)],
+                                   model="offline-test")
+            filed_result = market_tools.recent_filings(**ask_for)  # the real tool again
+            filed = filed_result.get("filings", {})
+            await asyncio.sleep(0.2)
+            yield UserMessage(content=[ToolResultBlock(tool_use_id="filed", content=text(filed_result))])
         for i, m in enumerate(scan["flagged"]):
             yield AssistantMessage(content=[ToolUseBlock(id=f"news{i}", name="mcp__market__get_news",
                                                          input={"ticker": m["ticker"]})], model="offline-test")
@@ -1787,7 +2207,7 @@ def install_fake_runs(run_brief, reports_db, market, db_path: Path = DB_PATH) ->
             yield UserMessage(content=[ToolResultBlock(tool_use_id=f"news{i}",
                                                        content=[part for n in news for part in text(n)])])
         yield ResultMessage(subtype="success", duration_ms=0, duration_api_ms=0, is_error=False, num_turns=2,
-                            session_id="offline-test", total_cost_usd=0.0, result=market.brief(scan, day, past))
+                            session_id="offline-test", total_cost_usd=0.0, result=market.brief(scan, day, past, filed))
 
     run_brief.market_session = fake_market_session
     run_brief.query = fake_agent
@@ -1822,6 +2242,11 @@ def offline_answer(reports_db, ask, question: str, db_path: Path = DB_PATH) -> s
                 c = checked[0]
                 lines.append(f"  Latest story update, on its move of {c['session_date']}: {c['verdict_label']}. "
                              f"{c['update_text']} (story update, {c['finished_at'][:10]}).")
+            import filings
+            taken = [f for f in filings.list_filings(conn, t) if f["read"] and f["read"]["status"] == "ok"]
+            if taken:
+                f = taken[0]
+                lines.append(f"  Latest first take, on its {f['title'].lower()}: {f['read']['headline']} (filing, {f['filing_date']}).")
         if not tickers:
             top = conn.execute("""SELECT ticker, COUNT(*) FROM report_tickers WHERE category = 'flagged'
                                   GROUP BY ticker ORDER BY COUNT(*) DESC, ticker LIMIT 3""").fetchall()
@@ -1925,6 +2350,154 @@ def follow_up(db_path: Path = DB_PATH, every_surprise: bool = False) -> dict:
     return stories.after_final_report(within_days=10_000 if every_surprise else None)
 
 
+# ---------------------------------------------------------------------------
+# Company filings (a simulated SEC, and a stand-in for Claude)
+# ---------------------------------------------------------------------------
+
+def sample_now(reports_db, market, db_path: Path = DB_PATH) -> datetime:
+    """The sample's clock: a minute after its latest report (or just after the close, once the day is final)."""
+    day = market.days[-1]
+    with closing(reports_db.connect(db_path, readonly=True)) as conn:
+        row = conn.execute("SELECT status, as_of FROM reports WHERE session_date = ?", (day.isoformat(),)).fetchone()
+    if row is None or row["status"] == "final":
+        return datetime.combine(day, time(16, 31), ET)
+    as_of = max(row["as_of"], getattr(market, "run_as_of", ""))  # a run in progress has moved the clock on already
+    return datetime.strptime(as_of, "%Y-%m-%d %H:%M ET").replace(tzinfo=ET) + timedelta(minutes=1)
+
+
+def read_filing_offline(system_prompt: str, prompt: str) -> tuple[str, float]:
+    """A free stand-in for Claude reading a sample filing: it picks out the headline, the figures table,
+    a few sentences and the outlook line, quoting each one as real Claude must. The real filings.py
+    still checks every quote and number against the filing."""
+    import re
+    text = prompt.split('cells are separated by " | "):\n<<<\n', 1)[1].rsplit("\n>>>", 1)[0]
+    lines = [ln for ln in text.splitlines() if ln and not ln.startswith(("Simulated sample data", "---"))]
+    company = re.search(r"^COMPANY: (.*) \(", prompt, re.M).group(1)
+    # Every sample document says it isn't real. The stand-in passes that on as a last point, so each first take says so too.
+    disclaimer = [{"text": ln, "quote": ln} for ln in text.splitlines() if ln.startswith("Simulated sample data")][:1]
+
+    def point(line):
+        return {"text": line if line.endswith(".") else line + ".", "quote": line}
+
+    if "results announcement" not in system_prompt:  # an announcement, or a report's discussion
+        start = next((i for i, ln in enumerate(lines) if ln.startswith(("Item 2. Management", "Item 7. Management"))), None)
+        if start is None:
+            start = next((i for i, ln in enumerate(lines) if ln.startswith("Item ")), 0)
+        body = [ln for ln in lines[start + 1:] if not ln.startswith("Item ")][:3]
+        if not body:
+            return json.dumps({"headline": "", "points": []}), 0.0
+        return json.dumps({"headline": body[0], "points": [point(ln) for ln in body] + disclaimer}), 0.0
+
+    figures = []
+    for metric, label in (("revenue", "Total revenue"), ("gross_profit", "Gross profit"), ("operating_income", "Operating income"),
+                          ("net_income", "Net income"), ("eps_diluted", "Diluted earnings per share")):
+        row = next((ln for ln in lines if ln.startswith(label + " | ")), None)
+        if row:
+            figures.append({"metric": metric, "as_written": row.split(" | ")[1].lstrip("$"),
+                            "scale": "units" if metric == "eps_diluted" else "millions", "quote": row})
+    ended = re.search(r"quarter ended (\w+) (\d+), (\d{4})", text)
+    months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+              "November", "December"]
+    period_end = f"{ended.group(3)}-{months.index(ended.group(1)) + 1:02d}-{int(ended.group(2)):02d}" if ended else None
+    revenue = next((ln for ln in lines if ln.startswith("Revenue was")), "")
+    outlook = next((ln for ln in lines if ln.startswith("Outlook:")), "")
+    directions = {"raised": "raised", "lowered": "lowered", "reaffirmed": "maintained"}
+    verb = next((v for v in directions if f" {v} " in outlook), None)
+    sentences = [ln for ln in lines[2:8] if ln.endswith(".") and not ln.startswith("Outlook:")]
+    changes = []
+    before = re.search(r"^Outlook: The company (\w+) ", prompt.split("FILING TEXT", 1)[0], re.M)
+    if before and verb and before.group(1) != verb:
+        changes.append({"text": f"The outlook changed: last quarter the company {before.group(1)} it, and this quarter it {verb} it.",
+                        "quote": outlook})
+    return json.dumps({
+        "headline": f"{company} reported revenue of {revenue.removeprefix('Revenue was ')}" if revenue else lines[0],
+        "period_end": period_end, "figures": figures, "points": [point(ln) for ln in sentences[:3]] + disclaimer,
+        "guidance": [{"text": outlook.removeprefix("Outlook: "), "direction": directions[verb], "quote": outlook}] if verb else [],
+        "changes": changes}), 0.0
+
+
+def install_fake_filings(filings, edgar, reports_db, market, db_path: Path = DB_PATH) -> SampleFilings:
+    """The Filings tab over the sample: a simulated SEC (in the SEC's own formats, at example.com addresses)
+    and a free stand-in for Claude. Your real edgar.py parses it all, and your real filings.py lists the
+    filings, checks the stand-in's quotes and numbers, compares figures and confirms them."""
+    edgar.WWW, edgar.DATA = "https://sec.example.com", "https://data.sec.example.com"  # reserved for examples
+    sec = SampleFilings(market, edgar.WWW, edgar.DATA)
+    clock = {"now": None}  # None: follow the sample's latest report. Seeding sets it, to fill in history.
+
+    def now() -> datetime:
+        return clock["now"] or sample_now(reports_db, market, db_path)
+
+    def answer(url, max_bytes=None):
+        if "/submissions/" in url or url.endswith("company_tickers.json"):
+            follow_watchlist(market, db_path)  # a stock added on the Stocks tab has filings too
+        try:
+            found = sec.get(url, now())
+        except (KeyError, StopIteration):
+            raise edgar.EdgarError("the SEC doesn't have that page", 404) from None
+        return found[:max_bytes] if isinstance(found, str) and max_bytes else found
+
+    edgar.get_json = edgar.get_text = answer
+    edgar.contact_set = lambda: True
+    filings.now_utc = lambda: now().astimezone(timezone.utc)
+    filings.ask_claude = read_filing_offline
+    filings.sample_clock = clock
+    return sec
+
+
+def _with_filings(db_path: Path):
+    """The main project's filings.py, set up over the sample (with the calendar's names and dates)."""
+    reports_db, market = connect_main(db_path), load_market(db_path)
+    import alerts
+    import edgar
+    import events
+    import filings
+    install_fake_events(events, market)
+    install_fake_filings(filings, edgar, reports_db, market, db_path)
+    return filings, events, alerts, reports_db, market
+
+
+def check_filings(db_path: Path = DB_PATH) -> str:
+    """What a real run does first: look for new filings, read new results announcements, confirm figures."""
+    filings, _, alerts, _, _ = _with_filings(db_path)
+    install_fake_alerts(alerts, db_path)
+    result = filings.check("scheduled")
+    if not result["new"] and not result["read"]:
+        return ""
+    names = ", ".join(sorted({f["ticker"] for f in result["new"]}))
+    read = f", {len(result['read'])} read" if result["read"] else ""
+    return f" · filings: {len(result['new'])} new ({names}){read}" if result["new"] else f" · filings:{read[1:]}"
+
+
+def seed_filings(db_path: Path, market) -> None:
+    """Fill in filings as daily use would have: a check after each day of the sample, so each results
+    announcement was read on its day and confirmed when its quarterly report arrived. Discord messages
+    from those days aren't replayed."""
+    filings, events, alerts, reports_db, market = _with_filings(db_path)
+    send, enabled = alerts.send, alerts.enabled
+    alerts.send, alerts.enabled = (lambda payload: "seeded"), (lambda: True)
+    try:
+        for day in market.days:
+            events.sample_clock["today"] = day
+            filings.sample_clock["now"] = (sample_now(reports_db, market, db_path) if day == market.days[-1]
+                                           else datetime.combine(day, time(17, 0), ET))
+            filings.check("scheduled")
+    finally:
+        events.sample_clock["today"], filings.sample_clock["now"] = market.end, None
+        alerts.send, alerts.enabled = send, enabled
+
+
+def filings_summary(db_path: Path = DB_PATH) -> dict:
+    reports_db = connect_main(db_path)
+    import filings
+    with closing(reports_db.connect(db_path, readonly=True)) as conn:
+        found = filings.list_filings(conn, limit=900)
+    takes = [f["read"] for f in found if f["read"] and f["read"]["status"] == "ok"]
+    checks = [r["check"] for t in takes for r in (t["figures"] or {}).get("rows", [])]
+    return {"listed": len(found), "results": sum(f["kind"] == "results" for f in found), "first_takes": len(takes),
+            "figures_confirmed": checks.count("confirmed"), "figures_waiting": checks.count("pending"),
+            "worth_a_look": sum(f["serious"] for f in found)}
+
+
 def install_fake_ask(ask, reports_db, db_path: Path = DB_PATH) -> None:
     """Make "Ask" answer from the sample data without calling Claude."""
     from claude_agent_sdk import ResultMessage, StreamEvent
@@ -1947,13 +2520,16 @@ def install_fake_ask(ask, reports_db, db_path: Path = DB_PATH) -> None:
 
 def make_app(db_path: Path = DB_PATH, live_ask: bool = False, live_runs: bool = False,
              live_embeddings: bool = False, live_alerts: bool = False, live_calendar: bool = False,
-             live_search: bool = False, live_stories: bool = False, frontend_dist: Path = FRONTEND_DIST):
+             live_search: bool = False, live_stories: bool = False, live_filings: bool = False,
+             frontend_dist: Path = FRONTEND_DIST):
     reports_db = connect_main(db_path)
     market = load_market(db_path)
     import alerts
     import api
     import ask
+    import edgar
     import events
+    import filings
     import prices
     import run_brief
     import followups
@@ -1978,6 +2554,13 @@ def make_app(db_path: Path = DB_PATH, live_ask: bool = False, live_runs: bool = 
         install_fake_prices(prices, reports_db, market, db_path)
     if not live_ask:
         install_fake_ask(ask, reports_db, db_path)
+    if not live_filings:
+        install_fake_filings(filings, edgar, reports_db, market, db_path)
+    api.FILINGS_CHECK_COOLDOWN_SECONDS = int(os.environ.get("FILINGS_CHECK_COOLDOWN_SECONDS", "15"))
+    api.FILING_READ_COOLDOWN_SECONDS = int(os.environ.get("FILING_READ_COOLDOWN_SECONDS", "15"))
+    # No schedule of its own: the program's after-close run (api.AUTO_CLOSE) stays off here. On the
+    # sample's clock it would start a run by itself, and clash with update/finalize and the demo's recordings.
+    api.AUTO_CLOSE = False
     return api.create_app(frontend_dist=frontend_dist)
 
 
@@ -2032,9 +2615,12 @@ def main() -> None:
                        help="find stocks with Yahoo Finance's real search (free; still edits only the test watchlist)")
     serve.add_argument("--live-stories", action="store_true",
                        help="Story updates' checks read real Yahoo news with real Claude (costs a few cents each)")
+    serve.add_argument("--live-filings", action="store_true",
+                       help="the Filings tab asks the real SEC (needs SEC_CONTACT) and reads with real Claude (costs a few cents each)")
     commands.add_parser("update", help="simulate a scheduled intraday run")
     commands.add_parser("finalize", help="simulate the run that writes the latest day's final report")
     commands.add_parser("events", help="simulate the daily events-calendar update")
+    commands.add_parser("filings", help="simulate a check for new company filings")
     outbox = commands.add_parser("alerts", help="show the simulated Discord alerts")
     outbox.add_argument("--clear", action="store_true", help="empty the outbox (the alert log is kept)")
     commands.add_parser("reset", help="delete the sample data")
@@ -2058,10 +2644,11 @@ def main() -> None:
             sys.exit("No sample data yet. Run: python testenv.py seed")
         app = make_app(live_ask=args.live_ask, live_runs=args.live_runs, live_embeddings=args.live_embeddings,
                        live_alerts=args.live_alerts, live_calendar=args.live_calendar, live_search=args.live_search,
-                       live_stories=args.live_stories)
-        live = [name for name, on in (("Claude", args.live_ask or args.live_runs or args.live_calendar or args.live_stories),
+                       live_stories=args.live_stories, live_filings=args.live_filings)
+        live = [name for name, on in (("Claude", args.live_ask or args.live_runs or args.live_calendar or args.live_stories
+                                       or args.live_filings),
                                       ("Voyage", args.live_embeddings), ("Discord", args.live_alerts),
-                                      ("Yahoo search", args.live_search)) if on]
+                                      ("Yahoo search", args.live_search), ("the SEC", args.live_filings)) if on]
         mode = f"LIVE {' + '.join(live)}" if live else "offline (no Claude, no Voyage, no Discord, no cost)"
         print(f"Test environment: http://localhost:{args.port}  ·  {mode}  ·  database {DB_PATH}")
         if not FRONTEND_DIST.is_dir():
@@ -2073,6 +2660,8 @@ def main() -> None:
         print(simulate_finalize())
     elif args.command == "events":
         print(simulate_events_scan())
+    elif args.command == "filings":
+        print(check_filings().removeprefix(" · ") or "filings: nothing new")
     elif args.command == "alerts":
         if args.clear:
             outbox_path().unlink(missing_ok=True)
@@ -2164,6 +2753,8 @@ def client(monkeypatch):
         app = testenv.make_app(db_path, frontend_dist=db_path.parent / "no-frontend")
         import api
         monkeypatch.setattr(api, "runs", api.RunManager())
+        for name, kind in (("filing_checks", "filings_check"), ("filing_reads", "filing_read")):  # no waits left over
+            monkeypatch.setattr(api, name, api.BackgroundJob(kind, lambda: 0, "busy", "Try again in {}."))
         test_client = TestClient(app).__enter__()  # kept open so background runs can finish
         opened.append(test_client)
         return test_client
@@ -2307,12 +2898,14 @@ def test_app_serves_two_months_of_reports(db, client):
 
 def test_offline_run_now_updates_the_latest_day(fresh_db, client):
     app = client(fresh_db)
+    import api
+    assert getattr(api, "AUTO_CLOSE", False) is False  # the program's after-close run never starts on its own here
     assert app.post("/api/runs", json={}).status_code == 202
     run = wait_for_run(app)
 
     assert run["state"] == "finished"
     assert run["result"]["outcome"] == "updated" and run["result"]["cost_usd"] == 0
-    assert [e["type"] for e in run["log"]][:2] == ["started", "tool_call"]
+    assert [e["type"] for e in run["log"]][:3] == ["filings", "started", "tool_call"]  # a run looks for new filings first
     latest = app.get("/api/reports/latest").json()
     assert latest["as_of"] == "2026-11-06 12:45 ET" and latest["revision"] == 3
 
@@ -2663,6 +3256,149 @@ def test_offline_ask_knows_how_moves_played_out(db, client):
     assert "(story update, " in done["answer"]
     general = app.post("/api/ask", json={"question": "What moved the most this week?"}).text
     assert "How flagged moves played out (follow-through): All flagged moves:" in general
+
+
+# ---------------------------------------------------------------------------
+# Company filings
+# ---------------------------------------------------------------------------
+
+def sample_filings(conn):
+    import filings
+    return filings.list_filings(conn, limit=900)
+
+
+def filings_view_once(app, job: str) -> dict:
+    """The Filings tab's data, once the check or read that was started has finished."""
+    for _ in range(200):
+        view = app.get("/api/filings").json()
+        if view[job]["state"] in ("finished", "failed"):
+            return view
+        time.sleep(0.05)
+    raise AssertionError(f"the {job} didn't finish")
+
+
+def test_filings_over_two_months(db, conn):
+    assert testenv.status_summary(db)["filings"] == {
+        "listed": 24, "results": 10, "first_takes": 5, "figures_confirmed": 18, "figures_waiting": 5, "worth_a_look": 3}
+    found = sample_filings(conn)
+    takes = {f["ticker"]: f for f in found if f["read"] and f["read"]["status"] == "ok"}
+    assert set(takes) == set(TICKERS)  # each company's results announcement was read on its day...
+    assert all(f["kind"] == "results" and f["read"]["trigger"] == "automatic" and f["read"]["cost_usd"] == 0 for f in takes.values())
+    assert all(f["read"]["finished_at"][:10] in (f["filing_date"], f["filed_at"][:10]) for f in takes.values())
+    earlier = [f for f in found if f["kind"] == "results" and not f["read"]]
+    assert len(earlier) == 5 and all(f["filing_date"] < "2026-09-01" for f in earlier)  # ...last quarter's are only listed
+
+    def checks(ticker):
+        return [r["check"] for r in takes[ticker]["read"]["figures"]["rows"]]
+
+    assert checks("MSFT") == ["confirmed"] * 5 and checks("AMZN") == ["pending"] * 5  # Amazon's report isn't filed yet
+    assert checks("JPM") == ["confirmed"] * 3  # a bank: no gross profit or operating income
+    msft = takes["MSFT"]["read"]
+    assert msft["headline"] == "Microsoft reported revenue of $43.1 billion, up 17% from the same quarter a year earlier."
+    assert msft["guidance"][0]["direction"] == "raised" and msft["changes"] and msft["notes"] == []
+    revenue = msft["figures"]["rows"][0]
+    assert (revenue["value"], revenue["prior"]["value"], revenue["change_year_pct"]) == (43_094e6, 40_845e6, 17.5)
+    # Apple filed its quarterly report minutes before the announcement; JPMorgan reported the evening before its calendar date
+    apple = [f for f in found if f["ticker"] == "AAPL" and f["filing_date"] == "2026-10-22"]
+    assert [f["kind"] for f in apple] == ["results", "quarterly"] and apple[1]["figures"]["rows"][0]["value"] == apple[0]["read"]["figures"]["rows"][0]["value"]
+    import events
+    import filings
+    reported = {r["ticker"]: r for r in filings.for_calendar(conn, events.events_between(conn, "2026-09-01", "2026-11-30"),
+                                                               "2026-09-01", "2026-11-30")}
+    assert reported["JPM"]["filing_date"] == "2026-09-16" and reported["JPM"]["event_id"] is not None
+    assert len(reported) == 5 and all(r["event_id"] is not None and r["headline"] for r in reported.values())
+    serious = [f for f in found if f["serious"]]
+    assert {f["title"] for f in serious} == {"Directors or senior officers leaving or appointed"}
+    assert all(f["url"].startswith("https://sec.example.com/Archives/edgar/data/") for f in found)  # never the real sec.gov
+    assert testenv.read_outbox(db) == []  # history isn't replayed to Discord
+
+
+def test_the_sample_sec_speaks_the_secs_formats(db):
+    """The simulated SEC is read by the program's real edgar.py, so the two can't drift apart."""
+    testenv.connect_main(db)
+    import edgar
+    market = testenv.load_market(db)
+    sec = testenv.SampleFilings(market)
+    late = datetime(2026, 12, 1, 12, 0, tzinfo=testenv.ET)
+    assert "SPY" not in {c["ticker"] for c in sec.companies().values()}  # funds aren't on the SEC's company list
+    for ticker in TICKERS:
+        known = edgar.periods(sec.facts(sec.cik(ticker), late))
+        quarters = known["revenue"]["quarters"]
+        assert len(quarters) >= 9 and any(q["derived"] for q in quarters.values())  # fourth quarters are worked out
+        results = next(f for f in sec.filings(ticker) if f["items"] == "2.02,9.01")
+        text = edgar.to_text(sec.press_release(ticker, 0))
+        latest = sec.quarter(ticker, 0)
+        assert f"Total revenue | ${latest['revenue']:,} | " in text and "This is not a real filing." in text
+        assert quarters[latest["end"]]["value"] == latest["revenue"] * 1_000_000  # the report agrees with the announcement
+        assert len(edgar.discussion(edgar.to_text(sec.report(ticker, 0)), annual=False)) > 2000
+        assert results["docs"][1][1] == "EX-99.1"
+    assert ("gross_profit" in edgar.periods(sec.facts(sec.cik("JPM"), late))) is False
+
+
+def test_offline_check_and_read_a_filing(fresh_db, client):
+    app = client(fresh_db)
+    view = app.get("/api/filings").json()
+    assert len(view["filings"]) == 24 and view["contact_set"] is True and view["expected"] == [] and view["not_covered"] == []
+    assert app.post("/api/filings/check", json={}).status_code == 202
+    checked = filings_view_once(app, "check")
+    assert checked["check"]["result"]["new_filings"] == 0 and checked["checked"]["trigger"] == "manual"
+
+    for kind, expected in (("announcement", "NVIDIA announced that its chief operating officer will step down"),
+                           ("quarterly", "Revenue increased")):
+        target = next(f for f in view["filings"] if f["kind"] == kind and f["read"] is None)
+        assert app.post("/api/filings/read", json={"accession": target["accession"]}).status_code == 202
+        done = filings_view_once(app, "read")
+        take = next(f for f in done["filings"] if f["accession"] == target["accession"])["read"]
+        assert take["status"] == "ok" and take["trigger"] == "manual" and take["cost_usd"] == 0 and expected in take["headline"]
+        assert take["points"] and all(p["quote"] for p in take["points"])
+
+
+def test_offline_run_now_finds_a_filing_made_today(fresh_db, client):
+    app = client(fresh_db)
+    app.post("/api/runs", json={})
+    run = wait_for_run(app)
+    messages = [e.get("message") for e in run["log"]]
+    assert "Filings: 1 new: MSFT (information shared with investors)" in messages  # filed at 12:40, found by the 12:45 run
+    assert "mcp__market__recent_filings" in [e["tool"] for e in run["log"] if e["type"] == "tool_call"]
+    brief = app.get("/api/reports/latest").json()["body_md"]
+    assert "The company also filed with the SEC: information shared with investors ([company filing](https://sec.example.com/" in brief
+    newest = app.get("/api/filings").json()["filings"][0]
+    assert (newest["ticker"], newest["filing_date"], newest["read"]) == ("MSFT", "2026-11-06", None)
+    assert "MSFT filing" not in str(testenv.read_outbox(fresh_db))  # routine: no Discord message
+
+
+def test_finalize_brings_the_report_that_confirms_the_announcement(fresh_db):
+    note = testenv.simulate_finalize(fresh_db)
+    assert " · filings: 2 new (AMZN, MSFT)" in note  # Amazon's quarterly report at 4:10pm, and Microsoft's midday filing
+    reports_db = testenv.connect_main(fresh_db)
+    with closing(reports_db.connect(fresh_db, readonly=True)) as c:
+        found = sample_filings(c)
+    amazon = next(f for f in found if f["ticker"] == "AMZN" and f["read"])
+    assert [r["check"] for r in amazon["read"]["figures"]["rows"]] == ["confirmed"] * 5
+    report = next(f for f in found if f["ticker"] == "AMZN" and f["kind"] == "quarterly" and f["filing_date"] == "2026-11-06")
+    assert report["figures"]["rows"][0]["value"] == amazon["read"]["figures"]["rows"][0]["value"]
+    assert testenv.status_summary(fresh_db)["filings"]["figures_waiting"] == 0
+
+
+def test_stocks_added_on_the_stocks_tab_get_filings(fresh_db, client):
+    app = client(fresh_db)
+    for ticker in ("GOOGL", "GOOG", "SPY"):
+        assert app.post("/api/watchlist", json={"ticker": ticker}).status_code == 201
+    assert app.post("/api/filings/check", json={}).status_code == 202
+    view = filings_view_once(app, "check")
+    assert view["check"]["result"]["status"] == "ok" and view["not_covered"] == ["SPY"]  # a fund: nothing to list
+    alphabet = [f for f in view["filings"] if f["ticker"] in ("GOOG", "GOOGL")]
+    assert alphabet and {f["ticker"] for f in alphabet} == {"GOOG", "GOOGL"}
+    by_ticker = {t: sorted(f["accession"] for f in alphabet if f["ticker"] == t) for t in ("GOOG", "GOOGL")}
+    assert by_ticker["GOOG"] == by_ticker["GOOGL"]  # two share classes, one company's filings
+
+
+def test_offline_ask_knows_the_latest_first_take(db, client):
+    app = client(db)
+    response = app.post("/api/ask", json={"question": "Why was AMZN flagged?"})
+    done = json.loads([line for line in response.text.splitlines() if '"done"' in line][0])
+    assert ("Latest first take, on its results announcement: Amazon.com reported revenue of $46.2 billion, up 20% from "
+            "the same quarter a year earlier. (filing, 2026-11-04).") in done["answer"]
 
 
 # ---------------------------------------------------------------------------

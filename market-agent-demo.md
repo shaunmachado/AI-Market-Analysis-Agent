@@ -1,6 +1,6 @@
 # Market Analyst Agent: A Live Demo on GitHub Pages
 
-This guide gives your GitHub page a **"Try the live demo"** link. Visitors click it and your real app opens in their browser, with nothing to install and no account to make. They can use it as you do: read today's report, page through two months of history, open charts, search, ask questions, run an update, check the calendar, add or star stocks, and see how flagged moves played out.
+This guide gives your GitHub page a **"Try the live demo"** link. Visitors click it and your real app opens in their browser, with nothing to install and no account to make. They can use it as you do: read today's report, page through two months of history, open charts, search, ask questions, run an update, check the calendar, add or star stocks, see how flagged moves played out, and read first takes on company filings.
 
 | | |
 |---|---|
@@ -9,7 +9,7 @@ This guide gives your GitHub page a **"Try the live demo"** link. Visitors click
 | **Cost** | Free. There's no server, no Claude and no market data, so there are no keys to leak and nothing a visitor can run up |
 | **Your program** | Untouched. The demo lives in its own folder next to `market-agent/` and `market-agent-testenv/`, and only reads them |
 
-This builds on `market-agent-test-enviro.md`, which makes the sample data, and `market-agent-followups.md`.
+This builds on `market-agent-test-enviro.md`, which makes the sample data, and `market-agent-filings.md`.
 
 ---
 
@@ -42,10 +42,10 @@ Visitors land on the Today tab, under a banner (screenshot: `demo-preview.png`):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Live demo with sample data. Prices, news, runs and answers are simulated, and no AI is       │
-│ called. Changes stay in this tab until you reload. See the code on GitHub                    │
+│ Live demo with sample data. Prices, news, company filings, runs and answers are simulated,  │
+│ and no AI is called. Changes stay in this tab until you reload. See the code on GitHub       │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
- Market Analyst   Today   Previous days   Calendar   Stocks   Follow-through   Story updates   ● Live
+ Market Analyst   Today  Previous days  Calendar  Stocks  Follow-through  Story updates  Filings  ● Live
 
  LATEST REPORT                                                  REQUEST A FRESH REPORT
  Intraday · updating   As of 2026-11-06 12:30 ET · saved 12:31 PM   [ Run update now ]
@@ -61,6 +61,7 @@ The sample's "today" is the latest trading day when you built the demo, frozen a
 - **Ask** streams an answer built from the sample data, the same way the test environment's offline answers are.
 - **Search**, **charts**, the **calendar** (and its **Update now**) and the **Stocks tab** all work. A visitor can find Costco, track it as a main stock, and see it get figures on the next run.
 - **Follow-through** and **Story updates** work too. **Refresh prices** replays a recorded refresh, and **Check for updates** on any flagged move replays that move's recorded check.
+- **Filings** shows the sample companies' simulated filings and first takes. **Check now** replays a recorded check, and **Read this filing** on any filing replays its recorded read. The second run finds a filing made minutes earlier.
 - **A reload starts the demo again**, so every visitor gets the same fresh start.
 
 ---
@@ -74,7 +75,8 @@ python demo.py build
        every answer the app asks for ─────────▶ site/demo-data/0/…
        4 "Run update now" runs, and what each changed ▶ site/demo-data/1/ … 4/
        a calendar "Update now", the stocks a visitor could add,
-       a "Refresh prices", and a story check for every flagged move ▶ site/demo-data/manifest.json
+       a "Refresh prices", a story check for every flagged move,
+       a filings "Check now", and a read of every filing ▶ site/demo-data/manifest.json
   3. adds demo-config.js and demo-shim.js to the page, before the app
 
 A visitor's browser
@@ -96,7 +98,7 @@ A visitor's browser
 
 ## 3. Before you start
 
-- [ ] The test environment works: in `market-agent-testenv/`, `pytest -v` shows `33 passed`.
+- [ ] The test environment works: in `market-agent-testenv/`, `pytest -v` shows `40 passed`.
 - [ ] You've run `npm install` in `market-agent/frontend` (frontend guide).
 - [ ] Git is installed (`git --version`), and you have a GitHub account.
 - [ ] **A small fix from the stocks guide.** If you built the Stocks tab before this guide, add this line to `frontend/src/styles.css`, after `.table-note { margin: 6px 0 0; }`. It makes the Today tab's "see all tracked stocks" link readable in dark mode:
@@ -335,6 +337,7 @@ Visitors see your real app, but they're told the data is simulated. Here's what 
 | Stocks tab | Search knows 35 US stocks and ETFs (plus a few that can't be tracked, to show the filtering). Track, star and remove follow `watchlist.py`'s rules and messages |
 | Calendar and Update now | The sample's calendar; **Update now** replays a recorded update |
 | Follow-through and Story updates | Your real `followups.py` and `stories.py` over the sample, with the test environment's stand-in for Claude. **Refresh prices** and each move's **Check for updates** replay recordings, and cost nothing |
+| Filings | Your real `edgar.py` and `filings.py` over the test environment's simulated SEC, with its stand-in for Claude. The companies' figures and filings are made up, and their links go to `sec.example.com`, not the real SEC. **Check now** and each filing's **Read this filing** replay recordings. Stocks a visitor adds have no filings in the demo |
 | Discord alerts | Shown as sent, as in the test environment. Nothing is sent |
 | Live updates | Played back in the page, not from a server |
 | What a visitor changes | Kept in that tab only, until they reload |
@@ -351,7 +354,7 @@ From `market-agent-demo/`, with the virtual environment active:
 pytest -v
 ```
 
-**Expected result:** `17 passed`, in about 40 seconds. They export a sample with two recorded runs into a temporary folder, and need no internet, npm, GitHub account or keys.
+**Expected result:** `18 passed`, in about 40 seconds. They export a sample with two recorded runs into a temporary folder, and need no internet, npm, GitHub account or keys.
 
 | Test | Proves that |
 |---|---|
@@ -359,6 +362,7 @@ pytest -v
 | `test_recorded_runs_move_the_day_on` | Each recorded run starts just after its time (12:45, then 13:00), shows the saved report once the run says it's saved, and stores only the files that changed. The MSFT alert is "sent" at the run's sample time |
 | `test_the_calendar_update_is_recorded` | The calendar's Update now is recorded with its progress messages, at no cost |
 | `test_follow_through_and_story_updates_are_recorded` | The Follow-through tab's data for each horizon and the automatic story checks are exported, a **Refresh prices** is recorded, and every flagged move has a recorded check that finishes |
+| `test_filings_and_first_takes_are_recorded` | The sample's 24 filings and 5 first takes are exported, at `sec.example.com` addresses. The first recorded run finds the filing made at 12:40. A **Check now** is recorded, and so is a read of every filing, each ending with a first take. The calendar's "Reported" entries are exported |
 | `test_stocks_a_visitor_can_add` | Costco has a name, its next earnings date, figures for each run and a year of chart prices. Bitcoin and Costco's Mexican listing can't be tracked, and the sample's own stocks can be removed and added back |
 | `test_the_demo_uses_the_programs_own_settings` | The search, Ask and Stocks settings in the demo are read from your program and the test environment, not copied by hand |
 | `test_exporting_leaves_your_projects_alone` | Every file in `market-agent/` and `market-agent-testenv/` is unchanged, and the scratch folder is deleted |
@@ -380,8 +384,8 @@ pytest -v
 
 ### 13.2 What was also tested
 
-- **From the guides alone:** all three folders were rebuilt from the guides (this one included), and every test passed: 276 passed and 3 skipped in `market-agent/`, 33 in `market-agent-testenv/`, and 17 here.
-- **In a real browser,** with the site served from a sub-folder (`/market-agent/`), as GitHub Pages serves it. The 15 checks passed, with no browser errors, failed requests or requests to any other website:
+- **From the guides alone:** all three folders were rebuilt from the guides (this one included), and every test passed: 415 passed and 4 skipped in `market-agent/`, 40 in `market-agent-testenv/`, and 18 here.
+- **In a real browser,** with the site served from a sub-folder (`/market-agent/`), as GitHub Pages serves it. The 16 checks passed, with no browser errors, failed requests or requests to any other website:
   1. The banner, **Live**, the sample day at 12:30, the main stocks and Coming up
   2. Previous days pages through all 43 earlier days, and a link straight to one day opens it
   3. Search finds the **same days as your real search** for "earnings", "quarterly" and "profit"; nonsense finds nothing
@@ -394,10 +398,11 @@ pytest -v
   10. The Calendar tab: the sample's month, **Update now**, and a day's page
   11. A reload starts the demo again
   12. Follow-through and Story updates: the patterns and 27 moves, **Refresh prices**, a recorded story check, and Ask's follow-through lines
-  13. Pressing **Run update now** again straight away explains the wait
-  14. On a phone, the banner wraps and nothing scrolls sideways
-  15. Dark mode, banner included
-- **Found and fixed while testing:** the Today tab's "see all tracked stocks" link was hard to read in dark mode (the one-line fix in section 3).
+  13. The Filings tab: first takes and confirmed figures, a recorded read, **Check now**, the calendar's "Reported" link, and a filing found by a run
+  14. Pressing **Run update now** again straight away explains the wait
+  15. On a phone, the banner wraps and nothing scrolls sideways
+  16. Dark mode, banner included
+- **Found and fixed while testing:** the Today tab's "see all tracked stocks" link was hard to read in dark mode (the one-line fix in section 3). Later, the Filings tab didn't refresh after a replayed run; the shim now tells the page, as the real app's watcher does.
 
 **Not tested here:** your actual `npm run build` (Vite couldn't be installed where this guide was written, so the same app was bundled with esbuild instead), and pushing to GitHub itself (publishing was tested against a local git repository). Step 3's checklist covers both on your computer, and section 9's check covers the live site.
 
@@ -416,7 +421,7 @@ pytest -v
 | `python demo.py publish` | `--remote URL` | `market-agent`'s `origin` | Where to publish |
 | | `--branch NAME` | `gh-pages` | The branch GitHub Pages serves (never `main`) |
 | Environment | `MARKET_AGENT_DIR`, `MARKET_AGENT_TESTENV_DIR` | the folders next to this one | Where your program and the test environment are |
-| `demo.py` | `cooldown_seconds` (in `export`) | `15` | The wait between presses of Run update now, Update now, Refresh prices and Check for updates |
+| `demo.py` | `cooldown_seconds` (in `export`) | `15` | The wait between presses of Run update now, Update now, Refresh prices, Check for updates, Check now and Read this filing |
 
 ---
 
@@ -469,8 +474,9 @@ pytest -v
 The site is your real React app plus a small script, demo-shim.js, that answers the app's
 requests inside the browser. Its data comes from the test environment: two months of
 simulated reports, a few recorded "Run update now" runs, the events calendar, the
-Stocks tab, and follow-through and story updates for every flagged move. There is no server and no Claude, so there are no keys to leak and nothing
-that can run up costs.
+Stocks tab, follow-through and story updates for every flagged move, and the sample companies'
+filings with their first takes. There is no server and no Claude, so there are no keys to leak
+and nothing that can run up costs.
 
     python demo.py build      make the site in site/ (sample data plus your app)
     python demo.py serve      try it at http://localhost:8200
@@ -625,6 +631,7 @@ def collect(client, db: Path) -> dict:
     """The answers that can change when a run saves a report, keyed by their file in demo-data/."""
     import api
     import events
+    import filings
     import reports_db
     import search_index
     files = {}
@@ -638,6 +645,7 @@ def collect(client, db: Path) -> dict:
         for e in found:  # ready-made lines for the demo's offline answers
             e["_line"], e["_line_company"] = events.event_line(e, company=False), events.event_line(e)
         files["calendar.json"] = {"today": events.today_et().isoformat(), "events": found,
+                                  "reported": filings.for_calendar(conn, found, days[-1], days[0]),  # results filed, by event
                                   "last_scan": events.last_scan(conn), "max_days": api.MAX_CALENDAR_DAYS}
     files["reports/latest.json"] = get(client, "/api/reports/latest")
     for day in days:
@@ -651,6 +659,7 @@ def collect(client, db: Path) -> dict:
     for horizon in (1, 5, 20):  # follow-through, as each horizon shows it
         files[f"followups/{horizon}.json"] = get(client, f"/api/followups?horizon={horizon}")
     files["stories.json"] = get(client, "/api/stories")
+    files["filings.json"] = get(client, "/api/filings")
     search_index.sync()
     with closing(search_index.connect()) as conn:
         files["search/passages.json"] = {"passages": [dict(r) for r in conn.execute(
@@ -693,6 +702,22 @@ def play_run(client, recorder, clock, reports_db, testenv, db: Path) -> list[dic
     return sorted((e for e in recorded if e["event"]["type"] in keep), key=lambda e: e["at"])
 
 
+def record_job(client, recorder, path: str, body: dict, event_type: str) -> list[dict]:
+    """Press one of the app's buttons and keep the live updates it sent, from "Starting…" to finished."""
+    recorder.start()
+    started = client.post(path, json=body)
+    if started.status_code != 202:
+        raise RuntimeError(f"{path} didn't start: {started.text}")
+    deadline = time.monotonic() + 15
+    while not any(e["event"]["type"] == event_type and e["event"]["job"]["state"] != "running"
+                  for e in recorder.events) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    recorded = [e for e in recorder.stop() if e["event"]["type"] == event_type]
+    if not recorded or recorded[-1]["event"]["job"]["state"] != "finished":
+        raise RuntimeError(f"{path} {body or ''} didn't finish")
+    return recorded
+
+
 def fresh_api_state(api, recorder_box: list) -> None:
     """A clean slate between the two sample databases (the api module stays loaded)."""
     api.runs = api.RunManager()
@@ -701,6 +726,8 @@ def fresh_api_state(api, recorder_box: list) -> None:
     recorder_box[:] = [Recorder(api.hub)]
     api.followup_refreshes = api.BackgroundJob("followups_refresh", lambda: 0, "busy", "{}")
     api.story_checks = api.BackgroundJob("story_check", lambda: 0, "busy", "{}")
+    api.filing_checks = api.BackgroundJob("filings_check", lambda: 0, "busy", "{}")
+    api.filing_reads = api.BackgroundJob("filing_read", lambda: 0, "busy", "{}")
     api.RUN_COOLDOWN_SECONDS = 0
     api.CALENDAR_SCAN_COOLDOWN_SECONDS = 0
     api.POLL_SECONDS = 0.2  # notice saved reports quickly while recording
@@ -804,6 +831,11 @@ def export(out: Path, end: date | None = None, tickers: list[str] | None = None,
             if recorded[-1]["event"]["job"]["state"] != "finished":
                 raise RuntimeError(f"Checking {move['ticker']}'s story didn't finish")
             story_checks[f"{move['session_date']}/{move['ticker']}"] = recorded
+        # 5. A recorded "Check now" on the Filings tab, and a recorded "Read this filing" for every filing
+        filings_check = record_job(client, box[0], "/api/filings/check", {}, "filings_check")
+        filing_reads = {}
+        for accession in dict.fromkeys(f["accession"] for f in get(client, "/api/filings")["filings"]):
+            filing_reads[accession] = record_job(client, box[0], "/api/filings/read", {"accession": accession}, "filing_read")
 
     # 4. Stocks a visitor can add: names, next events, prices and their figures in each recorded run
     universe, written = export_universe(testenv, out, universe_db, clock, end, tickers, len(recorded_runs), box)
@@ -824,6 +856,8 @@ def export(out: Path, end: date | None = None, tickers: list[str] | None = None,
         "calendar_scan": scan_events,
         "followups_refresh": refresh_events,
         "story_checks": story_checks,
+        "filings_check": filings_check,
+        "filing_reads": filing_reads,
         "limits": {"max_tracked": watchlist.MAX_TRACKED, "max_main": watchlist.MAX_MAIN,
                    "allowed_types": watchlist.ALLOWED_TYPES, "ticker_pattern": watchlist.TICKER.pattern,
                    "search_cache_seconds": watchlist.SEARCH_CACHE_SECONDS},
@@ -1206,6 +1240,12 @@ if __name__ == "__main__":
     storyJob: { state: 'idle', started_at: null, finished_at: null, message: null, target: null, result: null, error: null },
     newChecks: [], // story checks a visitor has played, newest first
     lastStoryStart: -Infinity,
+    filingsCheck: { state: 'idle', started_at: null, finished_at: null, message: null, target: null, result: null, error: null },
+    lastFilingsCheck: null, // the check made by "Check now" on the Filings tab, once played
+    lastFilingsCheckStart: -Infinity,
+    filingRead: { state: 'idle', started_at: null, finished_at: null, message: null, target: null, result: null, error: null },
+    newReads: {}, // filing number -> the first take a visitor has had read
+    lastFilingReadStart: -Infinity,
   }
   let universe = {}
 
@@ -1439,6 +1479,7 @@ if __name__ == "__main__":
         else if (event.type === 'run_finished') state.run = JSON.parse(JSON.stringify(event.run))
         else if (event.type === 'report_saved') state.step = step // the new report's files from now on
         emit(event)
+        if (event.type === 'report_saved') emit({ type: 'filings_updated' }) // a run looks for new filings too
       }, at * 1000)
     }
     return { run: JSON.parse(JSON.stringify(state.run)) }
@@ -1486,9 +1527,19 @@ if __name__ == "__main__":
       events: events
         .filter((e) => e.event_date >= first && e.event_date <= last)
         .map(({ _line, _line_company, ...e }) => e), // eslint-disable-line no-unused-vars
+      reported: reportedBetween(cal.reported || [], events, first, last),
       last_scan: state.lastScan || cal.last_scan,
       scan: state.scan,
     }
+  }
+
+  // Results filed, as api.py's calendar gives them: with the earnings event each answers if that event is
+  // in the dates asked for, and otherwise only on the day they were filed
+  function reportedBetween(reported, events, first, last) {
+    const inRange = new Set(events.filter((e) => e.event_date >= first && e.event_date <= last).map((e) => e.id))
+    return reported
+      .map((r) => (inRange.has(r.event_id) ? r : { ...r, event_id: null }))
+      .filter((r) => r.event_id !== null || (r.filing_date >= first && r.filing_date <= last))
   }
 
   // Moves every "..._at" time in a recorded event so the recording starts now
@@ -1739,6 +1790,51 @@ if __name__ == "__main__":
     return { check: job }
   }
 
+  // ---------------------------------------------------------------------------
+  // Company filings: api.py's /api/filings, "Check now" and "Read this filing"
+  // ---------------------------------------------------------------------------
+
+  async function filingsView(params) {
+    const ticker = (params.get('ticker') || '').toUpperCase()
+    if (ticker && !/^[A-Z0-9.\-^=]{1,15}$/.test(ticker)) throw new ApiError(400, 'invalid ticker')
+    const view = await data('filings.json')
+    for (const f of view.filings) if (state.newReads[f.accession]) f.read = state.newReads[f.accession]
+    if (ticker) view.filings = view.filings.filter((f) => f.ticker === ticker)
+    view.check = state.filingsCheck
+    view.read = state.filingRead
+    if (state.lastFilingsCheck) view.checked = state.lastFilingsCheck
+    return view
+  }
+
+  function checkFilings() {
+    if (state.filingsCheck.state === 'running') throw new ApiError(409, 'Filings are already being checked.')
+    tooSoon(state.lastFilingsCheckStart, 'Filings were just checked. Try again in {}.')
+    state.lastFilingsCheckStart = now()
+    const job = playJob(manifest.filings_check, (j) => (state.filingsCheck = j), (j) => {
+      if (j.result) state.lastFilingsCheck = { ...j.result, new: undefined, read: undefined, alerts: undefined }
+      emit({ type: 'filings_updated' })
+    })
+    return { check: job }
+  }
+
+  async function readFiling(body) {
+    const accession = body && body.accession
+    if (typeof accession !== 'string' || !/^\d{10}-\d{2}-\d{6}$/.test(accession))
+      throw new ApiError(400, 'send JSON like {"accession": "0000789019-26-000123"}')
+    const listed = (await data('filings.json')).filings.some((f) => f.accession === accession)
+    const recorded = manifest.filing_reads[accession]
+    if (!listed || !recorded) throw new ApiError(404, `No filing ${accession} is listed. Check for new filings first.`)
+    if (state.filingRead.state === 'running')
+      throw new ApiError(409, 'A filing is already being read. Its progress is shown on the Filings tab.')
+    tooSoon(state.lastFilingReadStart, 'A filing was just read. Try again in {}.')
+    state.lastFilingReadStart = now()
+    const job = playJob(recorded, (j) => (state.filingRead = j), (j) => {
+      if (j.result) state.newReads[accession] = j.result
+      emit({ type: 'filings_updated' })
+    })
+    return { read: job }
+  }
+
   const WHEN = { 1: 'the next day', 5: 'a week later', 20: 'a month later' }
   function describeGroup(g, horizon) {
     if (!g.judged) return `${g.label}: no moves to judge yet`
@@ -1925,6 +2021,11 @@ if __name__ == "__main__":
           `  Latest story update, on its move of ${c.session_date}: ${c.verdict_label}. ${c.update_text} (story update, ${c.finished_at.slice(0, 10)}).`,
         )
       }
+      const taken = (await filingsView(new URLSearchParams({ ticker: t }))).filings.filter((f) => f.read && f.read.status === 'ok')
+      if (taken.length) {
+        const f = taken[0]
+        lines.push(`  Latest first take, on its ${f.title.toLowerCase()}: ${f.read.headline} (filing, ${f.filing_date}).`)
+      }
     }
     if (!tickers.length) {
       const counts = await Promise.all(known.map(async (t) => [t, (await flaggedDays(t)).length]))
@@ -2008,12 +2109,15 @@ if __name__ == "__main__":
       if (path === '/api/calendar') return calendar(params)
       if (path === '/api/followups') return followupsView(params)
       if (path === '/api/stories') return storiesView(params)
+      if (path === '/api/filings') return filingsView(params)
     } else if (method === 'POST') {
       if (path === '/api/runs') return [202, startRun()]
       if (path === '/api/ask') return askEndpoint(body)
       if (path === '/api/calendar/scan') return [202, startCalendarScan()]
       if (path === '/api/followups/refresh') return [202, refreshFollowups()]
       if (path === '/api/stories/check') return [202, checkStory(body)]
+      if (path === '/api/filings/check') return [202, checkFilings()]
+      if (path === '/api/filings/read') return [202, await readFiling(body)]
       if (path === '/api/watchlist') return [201, await addStock(body)]
       if ((m = path.match(/^\/api\/watchlist\/([^/]+)\/remove$/))) return removeStock(decodeURIComponent(m[1]).toUpperCase())
       if ((m = path.match(/^\/api\/watchlist\/([^/]+)$/))) return setMain(decodeURIComponent(m[1]).toUpperCase(), body)
@@ -2053,7 +2157,7 @@ if __name__ == "__main__":
     strong.textContent = 'Live demo with sample data.'
     bar.append(
       strong,
-      ' Prices, news, runs and answers are simulated, and no AI is called. Changes stay in this tab until you reload.',
+      ' Prices, news, company filings, runs and answers are simulated, and no AI is called. Changes stay in this tab until you reload.',
     )
     if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(config.repo_url || '')) {
       const link = document.createElement('a')
@@ -2116,7 +2220,7 @@ def exported(tmp_path_factory):
 
 
 def read(out: Path, step: int, name: str):
-    return json.loads((out / str(step) / name).read_text())
+    return json.loads((out / str(step) / name).read_text(encoding='utf-8'))
 
 
 def newest(out: Path, manifest: dict, name: str, step: int):
@@ -2206,6 +2310,33 @@ def test_follow_through_and_story_updates_are_recorded(exported):
         assert last["result"]["status"] in ("ok", "no_news") and last["result"]["trigger"] == "manual"
 
 
+def test_filings_and_first_takes_are_recorded(exported):
+    out, manifest = exported
+    start = read(out, 0, "filings.json")
+    listed = {f["accession"]: f for f in start["filings"]}
+    assert len(listed) == 24 and start["contact_set"] and start["check"]["state"] == "idle"
+    takes = [f for f in listed.values() if f["read"]]
+    assert sorted(f["ticker"] for f in takes) == sorted(TICKERS) and all(f["kind"] == "results" for f in takes)
+    assert all(f["url"].startswith("https://sec.example.com/") for f in listed.values())  # never the real sec.gov
+    # Every run checks for filings first, so the list (with its "Checked" time) is stored again for each.
+    # The 12:45 run finds the filing Microsoft made at 12:40.
+    assert manifest["versions"]["filings.json"] == [0, 1, 2]
+    assert read(out, 2, "filings.json")["checked"]["finished_at"] > read(out, 1, "filings.json")["checked"]["finished_at"]
+    after = read(out, 1, "filings.json")["filings"]
+    assert len(after) == 25 and (after[0]["ticker"], after[0]["filed_at"]) == ("MSFT", "2026-11-06T17:40:00Z")
+    assert any("Filings: 1 new: MSFT" in str(e["event"].get("event", {}).get("message")) for e in manifest["runs"][0]["events"])
+    check = [e["event"]["job"] for e in manifest["filings_check"]]
+    assert check[0]["state"] == "running" and check[-1]["state"] == "finished" and check[-1]["result"]["status"] == "ok"
+    # Every filing has a recorded read, so a visitor can press "Read this filing" (or "Read again") on any of them
+    assert set(manifest["filing_reads"]) == {f["accession"] for f in after}
+    for accession, recorded in manifest["filing_reads"].items():
+        last = recorded[-1]["event"]["job"]
+        assert last["state"] == "finished" and last["target"]["accession"] == accession
+        assert last["result"]["status"] == "ok" and last["result"]["trigger"] == "manual" and last["result"]["points"]
+    reported = read(out, 0, "calendar.json")["reported"]
+    assert sorted(r["ticker"] for r in reported) == sorted(TICKERS) and all(r["event_id"] and r["headline"] for r in reported)
+
+
 def test_the_demo_uses_the_programs_own_settings(exported):
     _, manifest = exported
     testenv = demo.load_testenv()
@@ -2253,17 +2384,17 @@ def test_the_shim_loads_before_the_app():
 def make_site(folder: Path) -> Path:
     site = folder / "site"
     (site / demo.DATA).mkdir(parents=True)
-    (site / "index.html").write_text(demo.add_shim(VITE_INDEX))
-    (site / demo.DATA / "manifest.json").write_text('{"version": 1}')
+    (site / "index.html").write_text(demo.add_shim(VITE_INDEX), encoding="utf-8")
+    (site / demo.DATA / "manifest.json").write_text('{"version": 1}', encoding="utf-8")
     demo.finish_site(site, {"start": "2026-11-06T17:33:00Z", "today": "2026-11-06", "repo_url": ""})
     return site
 
 
 def test_finishing_the_site(tmp_path):
     site = make_site(tmp_path)
-    config = (site / "demo-config.js").read_text()
+    config = (site / "demo-config.js").read_text(encoding='utf-8')
     assert 'window.DEMO_CONFIG = {"data": "demo-data", "start": "2026-11-06T17:33:00Z"' in config
-    assert (site / "demo-shim.js").read_text() == demo.SHIM.read_text()
+    assert (site / "demo-shim.js").read_text(encoding='utf-8') == demo.SHIM.read_text(encoding='utf-8')
     assert (site / ".nojekyll").is_file()  # GitHub Pages serves every file as it is
     assert demo.check_site(site) == []
 
@@ -2276,13 +2407,13 @@ def test_finishing_the_site(tmp_path):
 def test_check_finds_what_shouldnt_be_published(tmp_path, name, content, problem):
     site = make_site(tmp_path)
     (site / name).parent.mkdir(parents=True, exist_ok=True)
-    (site / name).write_text(content)
+    (site / name).write_text(content, encoding="utf-8")
     assert any(problem in p for p in demo.check_site(site))
 
 
 def test_check_finds_absolute_paths_and_missing_files(tmp_path):
     site = make_site(tmp_path)
-    (site / "index.html").write_text(demo.add_shim(VITE_INDEX.replace("./assets/", "/assets/")))
+    (site / "index.html").write_text(demo.add_shim(VITE_INDEX.replace("./assets/", "/assets/")), encoding="utf-8")
     (site / "demo-shim.js").unlink()
     problems = demo.check_site(site)
     assert any("absolute paths" in p for p in problems) and any("demo-shim.js is missing" in p for p in problems)
@@ -2298,16 +2429,16 @@ def test_publish_puts_only_the_site_on_its_own_branch(tmp_path):
     site = make_site(tmp_path)
 
     demo.publish_site(site, str(remote))
-    (site / "extra.txt").write_text("a second publish")
+    (site / "extra.txt").write_text("a second publish", encoding="utf-8")
     demo.publish_site(site, str(remote))
 
     published = git("ls-tree", "-r", "--name-only", "gh-pages", cwd=remote).splitlines()
-    assert sorted(published) == sorted(str(p.relative_to(site)) for p in site.rglob("*") if p.is_file())
+    assert sorted(published) == sorted(p.relative_to(site).as_posix() for p in site.rglob("*") if p.is_file())
     assert git("rev-list", "--count", "gh-pages", cwd=remote) == "1"  # replaced, not piled up
     assert git("branch", "--list", cwd=remote) == "gh-pages"  # no other branch was touched or made
     with pytest.raises(ValueError, match="branch of its own"):
         demo.publish_site(site, str(remote), branch="main")
-    (site / "leak.txt").write_text("sk-ant-api03-abcdefghijklmnop")
+    (site / "leak.txt").write_text("sk-ant-api03-abcdefghijklmnop", encoding="utf-8")
     with pytest.raises(ValueError, match="Not ready to publish"):
         demo.publish_site(site, str(remote))
 

@@ -527,6 +527,42 @@ def test_bug17_the_filings_tab_formats_money_the_same_way():
 
 
 # ---------------------------------------------------------------------------
+# BUG-18: calendar updates (events.py) and story checks (stories.py) ignored MARKET_AGENT_ANTHROPIC_KEY.
+# run_brief.py takes ANTHROPIC_API_KEY out of the environment and gives the agent the project's key
+# itself (AGENT_ENV); Ask and first takes did the same, but these two didn't, so they used the Claude
+# Code login instead (and in the container, which has no login, they couldn't run at all).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("module", ["events", "stories"])
+def test_bug18_every_claude_call_uses_the_projects_key(module, monkeypatch):
+    import asyncio
+
+    import run_brief
+    from claude_agent_sdk import ResultMessage
+    target = sys.modules[module] if module in sys.modules else __import__(module)
+    seen = []
+
+    async def fake_query(*, prompt, options):
+        seen.append(options)
+        yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+                            session_id="s", total_cost_usd=0.01, result='{"events": []}')
+
+    monkeypatch.setattr(run_brief, "AGENT_ENV", {"ANTHROPIC_API_KEY": "sk-the-projects-key"})
+    monkeypatch.setattr(target, "query", fake_query)
+    assert asyncio.run(target._ask_claude_async("prompt")) == ('{"events": []}', 0.01)
+    assert seen[0].env == {"ANTHROPIC_API_KEY": "sk-the-projects-key"}
+    assert target.options.env == {}  # the shared settings aren't changed
+
+
+def test_bug18_no_other_claude_call_is_missing_the_key():
+    """Every file that asks Claude passes AGENT_ENV, so a new one can't miss it."""
+    for path in sorted(PROJECT.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "query(prompt=" in source:
+            assert "AGENT_ENV" in source, f"{path.name} asks Claude without the project's key (AGENT_ENV)"
+
+
+# ---------------------------------------------------------------------------
 # OPEN-01 (not fixed yet): the check that stops other websites from triggering runs trusts the
 # Host header. A page using DNS rebinding sends a matching Origin and Host, passes the check,
 # and can start paid runs and questions. Recommended fix: only accept the API's own origin

@@ -2,7 +2,7 @@
 
 How to test the market analyst agent, from quick offline checks to full runs with Claude, Discord alerts, the events calendar, tracked stocks, follow-through and story updates, company filings, and the schedule.
 
-This version covers the whole project, up to the guide that adds company filings and first takes (`market-agent-filings.md`). For trying the app on two months of sample data, see `market-agent-test-enviro.md`. For the public live demo, see `market-agent-demo.md`.
+This version covers the whole project, up to the guide that adds company filings and first takes (`market-agent-filings.md`). For trying the app on two months of sample data, see `market-agent-test-enviro.md`. For the public live demo, see `market-agent-demo.md`. For the app as a Docker image that anyone can run, see `market-agent-container.md`.
 
 ---
 
@@ -91,7 +91,7 @@ market-agent/
 | `test_filings.py` | 139, plus 1 live check | `market-agent-filings.md` |
 | `conftest.py` | (shared setup) | `market-agent-filings.md` (first added in `market-agent-alerts.md`) |
 
-The test environment and the live demo have their own tests, in their own folders: `pytest -v` in `market-agent-testenv/` gives `40 passed` (`market-agent-test-enviro.md`), and in `market-agent-demo/` gives `18 passed` (`market-agent-demo.md`).
+The test environment, the live demo and the container have their own tests, in their own folders: `pytest -v` in `market-agent-testenv/` gives `40 passed` (`market-agent-test-enviro.md`), in `market-agent-demo/` gives `18 passed` (`market-agent-demo.md`), and in `market-agent-container/` gives `71 passed, 1 skipped` (`market-agent-container.md`; the skipped one tests a built Docker image when you name it. On Windows: `69 passed, 3 skipped`).
 
 To create or update `test_market_tools.py`, replace its contents with the code from the [appendix](#appendix-test-file-source). **It matches `market_tools.py` from the sector context guide onwards.** With an older `market_tools.py`, its 13 sector-context tests fail. Its MCP check expects all seven tools, including `past_moves` from the follow-through guide and `recent_filings` from the filings guide: before those guides, it's the one test that fails.
 
@@ -495,6 +495,8 @@ Do this once you've added filings (`market-agent-filings.md`), with `SEC_CONTACT
 - The computer must have been awake.
 
 **If a run happened but no alert came,** the scheduler is missing `DISCORD_WEBHOOK_URL`. Search still works without `VOYAGE_API_KEY`, but only by keyword.
+
+**In the container,** the schedule is built in and needs no cron or Task Scheduler: `market-agent-container.md`, section 11.3. To test it, set `RUN_TIMES` to 2–3 minutes from now in New York time and follow `docker logs -f market-agent`.
 
 ---
 

@@ -22,6 +22,7 @@ tells the agent whether a move was about the company, its sector, or the market.
 Test it on its own:  npx @modelcontextprotocol/inspector python market_tools.py
 """
 
+import os
 from contextlib import closing
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -33,7 +34,9 @@ from mcp.server.mcpserver import MCPServer
 
 import reports_db
 
-WATCHLIST_FILE = Path(__file__).parent / "watchlist.txt"
+# WATCHLIST_FILE moves the list somewhere else (the container keeps it with its data). It is an environment
+# setting, not an argument, because the agent starts this file as a program of its own.
+WATCHLIST_FILE = Path(os.environ.get("WATCHLIST_FILE") or Path(__file__).parent / "watchlist.txt")
 ET = ZoneInfo("America/New_York")
 MARKET_CLOSE = time(16, 0)
 REFERENCE_TICKER = "SPY"             # used to tell whether the market is open

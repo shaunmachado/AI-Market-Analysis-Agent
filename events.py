@@ -19,6 +19,7 @@ Without an Anthropic key, or if Claude fails, the calendar dates from step 1 are
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import math
 import re
@@ -270,8 +271,10 @@ def build_prompt(articles: list[dict], known: list[dict], today: date, horizon_e
 
 
 async def _ask_claude_async(prompt: str) -> tuple[str, float]:
+    from run_brief import AGENT_ENV  # same auth as the report runs: the project's API key, if set (imported here:
+                                     # run_brief imports this module)
     result = None
-    async for message in query(prompt=prompt, options=options):
+    async for message in query(prompt=prompt, options=dataclasses.replace(options, env=AGENT_ENV)):
         if isinstance(message, ResultMessage):
             result = message
     if result is None or result.is_error or not result.result:

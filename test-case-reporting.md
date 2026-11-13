@@ -4,8 +4,8 @@ What was tested, what was found, what changed because of it, and how to repeat t
 
 | | |
 |---|---|
-| **Date** | 2026-11-10 (first round), 2026-11-12 (second round: company filings; third round: a bug hunt with the SEC's real data) |
-| **Version tested** | First round: `main` at commit `6922fdc` ("Add follow-through and story updates..."), plus the fixes listed in [section 4](#4-bug-log). Second round: the same, plus company filings (`market-agent-filings.md`) and BUG-10 to BUG-13. Third round: commit `3d0d333`, plus BUG-14 to BUG-17 |
+| **Date** | 2026-11-10 (first round), 2026-11-12 (second round: company filings; third round: a bug hunt with the SEC's real data; fourth round: the app in a container) |
+| **Version tested** | First round: `main` at commit `6922fdc` ("Add follow-through and story updates..."), plus the fixes listed in [section 4](#4-bug-log). Second round: the same, plus company filings (`market-agent-filings.md`) and BUG-10 to BUG-13. Third round: commit `3d0d333`, plus BUG-14 to BUG-17. Fourth round: commit `055a7cf`, plus the container (`market-agent-container.md`) and BUG-18 |
 | **Machine** | Windows 11 Pro, Python 3.13.3 (default text encoding: cp1252) |
 | **Key packages** | pytest 9.2.0, pandas 3.1.0, numpy 2.5.4, yfinance 1.8.0, starlette 1.10.0, mcp 2.3.0, claude-agent-sdk 0.2.177 |
 
@@ -110,6 +110,35 @@ With `SEC_CONTACT` set, the filings code could be tried on real filings for the 
 | `filings.py` | A figure's number must be in its quoted row as a whole number, with a loss's brackets | BUG-16 |
 | `filings.py`, `frontend/src/components/FilingsTab.jsx` | Money moves to the next unit when it rounds up to it | BUG-17 |
 
+### Fourth round: the app in a container (2026-11-12)
+
+`market-agent-container.md` packages the app as a Docker image: the test environment's demo by default, the real app with `MODE=real`. Its folder, `market-agent-container/`, sits next to the test environment and the demo, outside this repository. **Docker isn't installed on this machine**, so the image itself wasn't built; everything around it was, including the image's layout run without Docker (rows 54-57).
+
+| | Before | After |
+|---|---|---|
+| Offline tests | 660 passed, 5 skipped, 1 xfailed | **663 passed**, 5 skipped, 1 xfailed |
+| `test_regressions.py` | 57 | 60 (BUG-18) |
+| Container (`market-agent-container/`) | | **69 passed, 3 skipped** (the guide's 66 tests plus 5; on Linux 71 passed, 1 skipped). The skips: symlinks and `docker stop`'s signal work differently on Windows, and the built-image test needs Docker |
+| The image's layout, without Docker | | The demo's self-test: **28 of 28**, as the guide shows. Real mode's: **22 of 22** (the guide's 20, plus the two that need the internet), including Claude Code starting |
+| Bugs found | | **1 found, 1 fixed** (BUG-18: medium), and 4 places where the guide's container didn't fit this project (below) |
+
+**Where the guide's container didn't fit this project, and what changed** (in `market-agent-container/`, outside this repository; the guide now describes it):
+
+| What | Why it mattered | Change |
+|---|---|---|
+| The image took every `.md` file in the project | This project keeps its guides, reports and test notes there. The build refused to run: the guides quote example keys and webhooks, and `report.md` names folders on this computer | Only prompts go in (`*_prompt.md`); `analyst_prompt.md` is the only `.md` the code reads |
+| `run_brief.py` takes `ANTHROPIC_API_KEY` out of the environment and gives the agent `MARKET_AGENT_ANTHROPIC_KEY` (so Claude Code here keeps using your login) | In the container, the key given to `docker run` would never have reached the agent: real mode couldn't write a report, its start-up message said the key was missing, and the schedule left the briefs out | `start.py` gives the agent the key under the project's name too, and accepts either name |
+| This project's own after-close run (16:15, `AUTO_CLOSE_RUN`) is on by default | In the container it would have run a paid report every weekday, even with the schedule off | On only with `SCHEDULE=on` and a key; the start-up message lists it |
+| `.env` is read by every entry point | Running the container's programs on this computer (and its tests) would have loaded your real keys and webhook into the demo and the test servers. Checked by switching the change off: 1 or 2 of the guide's tests then fail here, depending on the order they run in (`test_the_demo_drops_real_keys_before_anything_runs` each time, `test_real_mode_points_the_app_and_its_jobs_at_the_data_folder` once) | `start.py` sets `PYTHON_DOTENV_DISABLED=1`: settings come from `docker run` only |
+| Windows | 3 of the guide's tests couldn't pass on Windows: two used a shell script as the stand-in for Claude Code, and one split a note at the `:` in `C:\` | The stand-in is a batch file on Windows; the note is split at `": "` |
+
+**Changes made to the program:**
+
+| File | Change | Why |
+|---|---|---|
+| `market_tools.py` | `WATCHLIST_FILE` can be moved with a setting of the same name (the container keeps the list with its data) | The container guide's one change to the program |
+| `events.py`, `stories.py` | Claude is given the project's key (`run_brief.AGENT_ENV`) | BUG-18 |
+
 ---
 
 ## 2. New test files
@@ -122,7 +151,7 @@ tests/
 
 Both use the same setup as the other test files: a temporary database and watchlist, fake Yahoo Finance data (borrowed from `test_market_tools.py`), and no Claude, Discord or Voyage. They need no internet and no keys.
 
-### 2.1 `test_regressions.py` (57 tests)
+### 2.1 `test_regressions.py` (60 tests)
 
 Each test failed before its fix and passes after it. Run one bug's tests with `pytest -v tests/test_regressions.py -k bug03`.
 
@@ -143,6 +172,7 @@ Each test failed before its fix and passes after it. Run one bug's tests with `p
 | BUG-15 | 2 | The SEC's filing envelope isn't part of a document's text; a document without one is unchanged |
 | BUG-16 | 11 | Numbers with a digit missing at the front, at the end, or a single digit from inside a figure are left out, and so is a loss written without its brackets. Whole numbers, with or without `$` or brackets, are kept. |
 | BUG-17 | 10 | $999.96M shows as $1.00B, $999,999.60 as $1.0M, and figures that were already right are unchanged. The Filings tab uses the same rule. |
+| BUG-18 | 3 | The calendar update and story checks hand Claude the project's key, without changing their shared settings. Every file that asks Claude passes `AGENT_ENV`, so a new one can't miss it. |
 | OPEN-01 | 1 (xfail) | A request whose Origin matches a spoofed Host header should be refused. It isn't yet, so the test is marked "expected to fail". |
 
 ### 2.2 `test_edge_cases.py` (181 tests)
@@ -237,9 +267,26 @@ In the order they were run. "Suite" means `pytest` over the whole `tests/` folde
 | 46 | Live checks, all four | 4 passed. Apple's press release now starts "Exhibit 99.1 / Apple reports fourth quarter results", as the filings guide's check by eye expects | |
 | 47 | Suite × 10 | **10 of 10: 660 passed, 5 skipped, 1 xfailed** (50-66 s), full tracebacks kept | |
 
+**Fourth round: the app in a container (2026-11-12)**
+
+| # | What was run | Result | Effect on the program |
+|---|---|---|---|
+| 48 | `docker --version` | Not found: Docker isn't installed on this machine | The image can't be built here; rows 53-56 test everything around it |
+| 49 | The container guide's five files created in `market-agent-container/`, and its change to `market_tools.py` applied by hand (the guide's whole file would have undone BUG-01 and BUG-03) | | |
+| 50 | Container suite (with `MARKET_AGENT_DIR` set, as for the test environment) | **1 failed:** the clean copy of the real projects had 12 problems. Every guide quotes an example key or webhook, and `report.md` names folders on this computer | Only prompts (`*_prompt.md`) go into the image |
+| 51 | Container suite again | **2 failed.** Real mode's notes were split at the `:` in `C:\`. The after-close note was missing, because `ANTHROPIC_API_KEY` had gone from the environment: `run_brief.py` takes it out | Led to the key fix in `start.py`, and to BUG-18 |
+| 52 | BUG-18's tests against the code before the fix, then after | 3 failed, then 3 passed | |
+| 53 | Container suite, then with its Claude Code stand-in working on Windows | 67 passed, 5 skipped; then **69 passed, 3 skipped** | |
+| 54 | `container.py context` on the real projects; every file in the copy compiled with Python 3.12.3 (the image's Python) | 52 files, 0.7 MB, no problems (the guide's count); all compile | |
+| 55 | The Dockerfile's frontend stage by hand: `npm ci` and `npm run build` on the clean copy alone | Installed and built | `package.json` and `package-lock.json` agree |
+| 56 | The image's `/app` laid out by hand, `start.py prepare`, the demo started as the container starts it, `start.py selftest`; then a browser | **28 of 28** (44 reports, a simulated run, a 106-word answer, a filings check), as the guide shows. In the browser: the banner and its version, the report, the Filings tab | |
+| 57 | Real mode the same way, with no key | The start-up message names the missing key, `SEC_CONTACT` and volume. `selftest`: **22 of 22**, GET requests only, Claude Code 2.1.317 starts. The data folder holds `reports.db`, `search.db` and the starter watchlist | |
+| 58 | Suite | **663 passed, 5 skipped, 1 xfailed** | |
+| 59 | Test environment, demo and container suites, one at a time | **40 passed**, **18 passed**, **69 passed, 3 skipped**. (The container suite's first run here overlapped my edits to this report and the container guide, so its last test, which checks the main folder doesn't change during the run, failed as it should. Run again alone: all passed) | Run them alone, as their guides say |
+
 **The 4 skipped tests** (5 since the filings round) are expected: the live checks (they need `LIVE_TESTS=1` and internet, and the SEC's also needs `SEC_CONTACT`), and `test_editing_keeps_the_files_permissions`, which is skipped on Windows because file permissions work differently there.
 
-**Not run** (they cost money or need setup outside this machine): agent test runs with Claude, the Discord alert check, the calendar and follow-through checks with Claude, and the schedule test. See [section 5.2](#52-what-wasnt-tested).
+**Not run** (they cost money or need setup outside this machine): agent test runs with Claude, the Discord alert check, the calendar and follow-through checks with Claude, the schedule test, and anything that needs Docker. See [section 5.2](#52-what-wasnt-tested).
 
 ---
 
@@ -431,6 +478,17 @@ Severity: **High** = breaks the app or gives wrong figures with no warning. **Me
 | **Fix** | A figure that rounds up to the next unit is shown in it: `$1.00B`, `$1.0M` |
 | **Regression tests** | `test_bug17_*` (10) |
 
+### BUG-18: calendar updates and story checks didn't use the project's API key — Medium, fixed
+
+| | |
+|---|---|
+| **Where** | `events.py` (the calendar update) and `stories.py` (story checks), each in `_ask_claude_async()` |
+| **Symptom** | With `MARKET_AGENT_ANTHROPIC_KEY` set, reports, Ask and first takes bill that key, but calendar updates and story checks ran on the Claude Code login instead. In the container, which has no login, they couldn't run at all |
+| **Root cause** | `run_brief.py` takes `ANTHROPIC_API_KEY` out of the environment and hands the agent the project's key itself (`AGENT_ENV`). `ask.py` and `filings.py` pass `AGENT_ENV`; these two were missed |
+| **Fix** | Both pass `AGENT_ENV` too (imported when they call Claude, because `run_brief.py` imports them). The shared settings aren't changed |
+| **Effect** | On this computer, calendar updates and story checks now bill `MARKET_AGENT_ANTHROPIC_KEY` like everything else (each is capped, as before: at most $0.25 a calendar request and $0.10 a story check) |
+| **Regression tests** | `test_bug18_*` (3): each module hands Claude the project's key, and every file that asks Claude passes `AGENT_ENV`, so a new one can't miss it |
+
 ---
 
 ## 5. Open issues and what wasn't tested
@@ -460,6 +518,8 @@ Severity: **High** = breaks the app or gives wrong figures with no warning. **Me
 | Earnings per share copied from the wrong row | Releases also have a "Diluted" row of share counts (Microsoft's: `Diluted \| 7,446 \| 7,466`). A figure from it passes every check, because earnings per share has no wrong-unit check (it can move a lot between quarters). The quarterly report would flag it later | Watch the first real takes. A limit on how far EPS can move from the quarter before would catch it, at the cost of hiding a real large move |
 | Why `test_events.py::test_update_now_has_a_cooldown_and_runs_one_at_a_time` failed once | It failed once in 20 suite runs and not in 35 more, so its full traceback wasn't caught | Its wait limit is now 20 s. If it fails again, run step 2 with `--tb=long` saved per run (as in row 28c) and log what it shows |
 | First takes by real Claude, and their real cost | Costs a few cents a read | `python filings.py read ACCESSION` on a recent results announcement (filings guide, section 12.5). It prints the cost. |
+| The Docker image: building it (Python, `pip`, `apt-get`, `npm` inside Docker), `container.py test`, publishing to `ghcr.io`, ARM | Docker isn't installed here | Install Docker Desktop, then `market-agent-container.md` sections 5 to 8. `container.py test` refuses to pass an image that doesn't work |
+| Real mode in a container with a real key: a brief, Ask, the calendar update and story checks, the schedule | Needs Docker, and costs what a run costs | The container guide's checklist in section 15, with `python container.py run --real`. Check the log says the schedule includes the after-close report only when `SCHEDULE=on` |
 
 ### 5.3 Guides to update
 

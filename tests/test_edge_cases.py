@@ -3,7 +3,7 @@
 The other test files check that each feature works. These check the edges around it: values
 exactly at a limit and one past it, empty and odd input, bad data from Yahoo or Claude, and
 requests a browser or another website could send. Every test here passed when it was written;
-they're here so later versions keep it that way. See test-case-reporting.md.
+they're here so later versions keep it that way. See docs/test-case-reporting.md.
 
 Run from the project folder:
     pytest -v tests/test_edge_cases.py

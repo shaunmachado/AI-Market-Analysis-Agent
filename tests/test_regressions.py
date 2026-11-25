@@ -1,4 +1,4 @@
-"""Regression tests: one group per bug found while testing (see test-case-reporting.md).
+"""Regression tests: one group per bug found while testing (see docs/test-case-reporting.md).
 
 Each test failed before its fix and passes after it, so the bug can't come back unnoticed.
 The bug ID (BUG-01, BUG-02...) matches the bug log in the report, so you can run one group:
